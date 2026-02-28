@@ -12,10 +12,18 @@ export const docsNavigation = [
     section: 'Architecture & Concepts',
     items: [
       { title: 'Overview', slug: 'architecture' },
-      { title: 'Message Patterns', slug: 'architecture/message-patterns' },
       { title: 'Transport Abstraction', slug: 'architecture/transport-abstraction' },
       { title: 'Routing', slug: 'architecture/routing' },
       { title: 'Dependency Injection', slug: 'architecture/dependency-injection' },
+    ],
+  },
+  {
+    section: 'Messaging Patterns',
+    items: [
+      { title: 'Commands', slug: 'messaging/commands' },
+      { title: 'Events', slug: 'messaging/events' },
+      { title: 'Requests', slug: 'messaging/requests' },
+      { title: 'Multicast Requests', slug: 'messaging/multicast-requests' },
     ],
   },
   {
@@ -28,15 +36,6 @@ export const docsNavigation = [
       { title: 'SQL Server', slug: 'transports/sql-server' },
       { title: 'PostgreSQL', slug: 'transports/postgres' },
       { title: 'In-Process', slug: 'transports/in-process' },
-    ],
-  },
-  {
-    section: 'Messaging Patterns',
-    items: [
-      { title: 'Commands', slug: 'messaging/commands' },
-      { title: 'Events', slug: 'messaging/events' },
-      { title: 'Requests', slug: 'messaging/requests' },
-      { title: 'Multicast Requests', slug: 'messaging/multicast-requests' },
     ],
   },
   {
