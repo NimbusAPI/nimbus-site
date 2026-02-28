@@ -1,0 +1,281 @@
+---
+title: Cafe Application
+description: A complete example demonstrating Nimbus messaging patterns in a real-world scenario
+order: 1
+category: Examples
+---
+
+The Cafe Application is a comprehensive example that demonstrates how to build a distributed system using Nimbus. It simulates a coffee shop where customers place orders, which are then processed through multiple services working together via message-based communication.
+
+## Overview
+
+The example models a coffee shop workflow with three main actors:
+
+- **Cashier** - Takes customer orders and processes payments
+- **Barista** - Makes the coffee
+- **Waiter** - Coordinates delivery (only delivers when both paid and made)
+
+This demonstrates how Nimbus enables loosely-coupled, event-driven architectures where services can operate independently while maintaining business logic consistency.
+
+## Architecture
+
+### Projects
+
+The example consists of four .NET projects:
+
+**Cafe.Messages** (netstandard2.0)
+- Shared message contracts library
+- Contains commands and events used across all services
+- No business logic, just data contracts
+
+**Cafe.Cashier** (console app)
+- Handles `PlaceOrderCommand`
+- Publishes `OrderPaidForEvent` and `OrderPlacedEvent`
+- Includes a `CustomerOrderGenerator` that simulates customers placing orders every 5 seconds
+
+**Cafe.Barista** (console app)
+- Subscribes to `OrderPlacedEvent` as a competing consumer
+- Simulates coffee preparation (1 second delay)
+- Publishes `OrderIsReadyEvent` when done
+
+**Cafe.Waiter** (console app)
+- Subscribes to both `OrderPaidForEvent` and `OrderIsReadyEvent` as a competing consumer
+- Maintains in-memory state of which orders are paid/made
+- Only delivers orders when both conditions are met (demonstrating event correlation)
+
+### Message Flow
+
+```
+Customer (simulated)
+    |
+    v
+[PlaceOrderCommand] ---> Cashier
+    |
+    |---> publishes OrderPaidForEvent
+    |---> publishes OrderPlacedEvent
+              |
+              v
+          Barista (handles OrderPlacedEvent)
+              |
+              |---> simulates making coffee (1 sec)
+              |---> publishes OrderIsReadyEvent
+                         |
+                         v
+                    Waiter
+                  (correlates events)
+                         |
+                         v
+              Delivers when both paid AND ready
+```
+
+## Key Nimbus Concepts Demonstrated
+
+### 1. Commands vs Events
+
+**Commands** (fire-and-forget, single handler):
+```csharp
+public class PlaceOrderCommand : IBusCommand
+{
+    public Guid OrderId { get; set; }
+    public string CustomerName { get; set; }
+    public string CoffeeType { get; set; }
+}
+```
+
+**Events** (publish-subscribe, multiple handlers):
+```csharp
+public class OrderPlacedEvent : IBusEvent
+{
+    public Guid OrderId { get; set; }
+    public string CoffeeType { get; set; }
+    public string CustomerName { get; set; }
+}
+```
+
+### 2. Competing Consumers
+
+The Barista uses `IHandleCompetingEvent<T>` which allows multiple Barista instances to share the workload:
+
+```csharp
+public class MakeThemTheirCoffee : IHandleCompetingEvent<OrderPlacedEvent>
+{
+    private readonly IBus _bus;
+
+    public async Task Handle(OrderPlacedEvent busEvent)
+    {
+        // Simulate making coffee
+        await Task.Delay(TimeSpan.FromSeconds(1));
+
+        // Publish completion event
+        await _bus.Publish(new OrderIsReadyEvent(
+            busEvent.OrderId,
+            busEvent.CoffeeType,
+            busEvent.CustomerName));
+    }
+}
+```
+
+This pattern enables horizontal scaling - you can run multiple Barista instances and they'll automatically share orders.
+
+### 3. Event Correlation
+
+The Waiter demonstrates how to correlate multiple events using a shared correlation ID (the `OrderId`):
+
+```csharp
+public class OrderDeliveryService : IOrderDeliveryService
+{
+    private readonly List<Guid> _madeOrderIds = new List<Guid>();
+    private readonly List<Guid> _paidOrderIds = new List<Guid>();
+
+    public void MarkAsPaid(Guid orderId)
+    {
+        _paidOrderIds.Add(orderId);
+        CheckWhetherWeShouldDeliver(orderId);
+    }
+
+    public void MarkAsMade(Guid orderId)
+    {
+        _madeOrderIds.Add(orderId);
+        CheckWhetherWeShouldDeliver(orderId);
+    }
+
+    private void CheckWhetherWeShouldDeliver(Guid orderId)
+    {
+        if (!_madeOrderIds.Contains(orderId))
+        {
+            _logger.Information("{OrderId} isn't ready yet.", orderId);
+            return;
+        }
+
+        if (!_paidOrderIds.Contains(orderId))
+        {
+            _logger.Information("{OrderId} hasn't been paid for yet.", orderId);
+            return;
+        }
+
+        DeliverOrderToCustomer(orderId);
+    }
+}
+```
+
+This pattern handles the distributed saga where order completion depends on multiple independent operations.
+
+### 4. Autofac Integration
+
+Each service uses Autofac modules to configure Nimbus:
+
+```csharp
+var builder = new ContainerBuilder();
+builder.RegisterAssemblyModules(typeof(Program).Assembly);
+
+using (builder.Build())
+{
+    Console.ReadKey();
+    return;
+}
+```
+
+The `BusModule` shows how to configure Nimbus with different transports:
+
+```csharp
+builder.RegisterNimbus(handlerTypesProvider);
+builder.Register(componentContext => new BusBuilder()
+    .Configure()
+    .WithTransport(new AMQPTransportConfiguration()
+        .WithBrokerUri("amqp://localhost:5672")
+        .WithCredentials("admin", "admin"))
+    .WithNames("Cashier", Environment.MachineName)
+    .WithTypesFrom(handlerTypesProvider)
+    .WithAutofacDefaults(componentContext)
+    .WithSerilogLogger()
+    .WithJsonSerializer()
+    .Build())
+    .As<IBus>()
+    .AutoActivate()
+    .OnActivated(c => c.Instance.Start())
+    .SingleInstance();
+```
+
+### 5. Transport Agnostic
+
+The BusModule includes commented examples for switching between transports:
+
+- **Azure Service Bus** (with large message support via Blob Storage)
+- **Redis**
+- **AMQP (ActiveMQ Artemis)** (currently active in the example)
+
+You can switch transports by simply changing the configuration - no changes to business logic required.
+
+### 6. Structured Logging
+
+All services use Serilog with Seq integration for distributed tracing:
+
+```csharp
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.Console()
+    .MinimumLevel.Debug()
+    .WriteTo.Seq("http://localhost:5341")
+    .Enrich.WithProperty("Application", "Cashier")
+    .CreateLogger();
+```
+
+This allows you to trace orders across all services in Seq's UI.
+
+## Running the Example
+
+### Prerequisites
+
+1. **Message Broker** - Choose one:
+   - ActiveMQ: `docker run -p 5672:5672 apache/activemq-artemis`
+   - Redis: `docker run -p 6379:6379 redis`
+   - Azure Service Bus: Set environment variables for connection strings
+
+2. **Seq** (optional, for log aggregation):
+   ```bash
+   docker run -d -p 5341:80 -e ACCEPT_EULA=Y datalust/seq
+   ```
+
+### Running the Services
+
+1. Start your chosen message broker
+2. Start all three services in separate terminal windows:
+
+```bash
+# Terminal 1
+cd src/Cafe.Cashier
+dotnet run
+
+# Terminal 2
+cd src/Cafe.Barista
+dotnet run
+
+# Terminal 3
+cd src/Cafe.Waiter
+dotnet run
+```
+
+### What to Observe
+
+Once running, you'll see:
+
+1. **Cashier** generates random orders every 5 seconds
+2. **Barista** picks up orders and "makes" them (1 second delay)
+3. **Waiter** coordinates delivery, logging when orders aren't ready yet
+4. Orders are successfully delivered once both paid and made
+
+Try scaling by running multiple Barista instances - they'll automatically share the workload via competing consumers.
+
+## Learning Points
+
+This example teaches:
+
+1. **Command/Event Distinction** - When to use commands vs events
+2. **Competing Consumers** - How to scale message handlers horizontally
+3. **Event Correlation** - Coordinating distributed workflows with correlation IDs
+4. **Transport Independence** - Swapping message brokers without code changes
+5. **Autofac Integration** - Dependency injection with Nimbus
+6. **Structured Logging** - Distributed tracing across services
+
+## Source Code
+
+The complete source code is available in the [Nimbus GitHub repository](https://github.com/NimbusAPI/Nimbus/tree/develop/src) under the `Cafe.*` projects.

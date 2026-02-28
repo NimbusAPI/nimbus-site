@@ -1,0 +1,43 @@
+---
+interface Props {
+  title?: string;
+  lang?: string;
+  showLineNumbers?: boolean;
+}
+
+const { title, lang = 'csharp', showLineNumbers = false } = Astro.props;
+---
+
+<div class="code-block-wrapper shadow-sm my-8">
+  {title && (
+    <div class="code-block-header bg-gray-100 border border-gray-300 border-b-0 rounded-t-lg px-4 py-3 flex items-center gap-2">
+      <svg class="w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+      </svg>
+      <span class="text-sm font-medium text-gray-700">{title}</span>
+      <span class="text-xs text-gray-500 ml-auto">{lang}</span>
+    </div>
+  )}
+  <div class:list={[
+    'code-block-content',
+    'bg-white',
+    'border border-gray-300',
+    title ? 'rounded-b-lg' : 'rounded-lg',
+    'overflow-hidden'
+  ]}>
+    <slot />
+  </div>
+</div>
+
+<style>
+  .code-block-content :global(pre) {
+    margin: 0;
+    padding: 1rem;
+    overflow-x: auto;
+  }
+
+  .code-block-content :global(code) {
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+  }
+</style>

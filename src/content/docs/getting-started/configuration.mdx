@@ -1,0 +1,273 @@
+---
+title: "Configuration"
+description: "Learn how to configure Nimbus for different environments and scenarios"
+category: "getting-started"
+order: 4
+---
+
+import Callout from '@components/ui/Callout.astro';
+
+## Configuration Basics
+
+Nimbus uses a fluent builder API for configuration. The `BusBuilder` class provides methods to configure all aspects of the bus.
+
+```csharp
+var bus = new BusBuilder()
+    .Configure()
+    .WithTransport(transportConfig)
+    .WithNames(applicationName, instanceName)
+    .WithTypesFrom(typeProvider)
+    .WithDependencyResolver(resolver)
+    .Build();
+```
+
+## Transport Configuration
+
+Each transport has its own configuration class:
+
+### Redis Transport
+
+```csharp
+using Nimbus.Transports.Redis;
+
+var transportConfig = new RedisTransportConfiguration()
+    .WithConnectionString("localhost:6379")
+    .WithDatabase(0); // Optional: specify Redis database number
+```
+
+### Azure Service Bus
+
+```csharp
+using Nimbus.Transports.AzureServiceBus;
+
+var transportConfig = new AzureServiceBusTransportConfiguration()
+    .WithConnectionString("Endpoint=sb://your-namespace.servicebus.windows.net/;...")
+    .WithAutoDeleteOnIdle(TimeSpan.FromDays(7)) // Optional
+    .WithMaxDeliveryAttempts(10); // Optional
+```
+
+### AMQP (ActiveMQ Artemis)
+
+```csharp
+using Nimbus.Transports.AMQP;
+
+var transportConfig = new AMQPTransportConfiguration()
+    .WithBrokerUri("amqp://localhost:5672")
+    .WithUsername("admin")
+    .WithPassword("admin");
+```
+
+### In-Process (for testing)
+
+```csharp
+using Nimbus.Transports.InProcess;
+
+var transportConfig = new InProcessTransportConfiguration();
+```
+
+## Application and Instance Names
+
+Nimbus requires an application name and instance name:
+
+```csharp
+.WithNames("MyApplication", Environment.MachineName)
+```
+
+- **Application Name**: Identifies your application (e.g., "OrderService")
+- **Instance Name**: Identifies the specific instance (e.g., machine name or container ID)
+
+<Callout type="info">
+These names are used for routing, logging, and identifying message sources.
+</Callout>
+
+## Type Provider
+
+The type provider tells Nimbus which assemblies to scan for message types and handlers:
+
+```csharp
+using Nimbus.Configuration;
+
+var typeProvider = new AssemblyScanningTypeProvider(
+    typeof(MyCommand).Assembly,
+    typeof(MyCommandHandler).Assembly,
+    typeof(MyEvent).Assembly
+);
+
+.WithTypesFrom(typeProvider)
+```
+
+## Dependency Injection
+
+### Autofac Integration
+
+```csharp
+using Autofac;
+using Nimbus.Containers.Autofac;
+
+var builder = new ContainerBuilder();
+
+// Register your handlers
+builder.RegisterType<MyCommandHandler>().AsImplementedInterfaces();
+builder.RegisterType<MyService>().AsImplementedInterfaces();
+
+var container = builder.Build();
+
+var bus = new BusBuilder()
+    .Configure()
+    // ... other config
+    .WithAutofacDefaults(container.BeginLifetimeScope())
+    .Build();
+```
+
+### Custom DI Container
+
+Implement `IDependencyResolver` for other containers:
+
+```csharp
+public class MyDependencyResolver : IDependencyResolver
+{
+    public object Resolve(Type type) { /* ... */ }
+    public IDependencyResolverScope CreateChildScope() { /* ... */ }
+    // ... implement other methods
+}
+
+.WithDependencyResolver(new MyDependencyResolver())
+```
+
+## Serialization
+
+### JSON Serialization
+
+```csharp
+using Nimbus.Serializers.Json;
+
+.WithJsonSerializer()
+```
+
+### Custom Serializer
+
+Implement `ISerializer`:
+
+```csharp
+.WithSerializer(new MyCustomSerializer())
+```
+
+<Callout type="tip">
+The default DataContract serializer is optimized for performance but requires `[DataContract]` and `[DataMember]` attributes. JSON serialization is more flexible but slightly slower.
+</Callout>
+
+## Logging
+
+### Serilog
+
+```csharp
+using Nimbus.Logger.Serilog;
+using Serilog;
+
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.Console()
+    .CreateLogger();
+
+.WithSerilogLogger(Log.Logger)
+```
+
+### Log4net
+
+```csharp
+using Nimbus.Logger.Log4net;
+
+.WithLog4netLogger()
+```
+
+## Environment-Specific Configuration
+
+Use different configurations for development, testing, and production:
+
+```csharp
+public static IBus CreateBus(IConfiguration config, IContainer container)
+{
+    var environment = config["Environment"];
+
+    var transportConfig = environment switch
+    {
+        "Development" => new RedisTransportConfiguration()
+            .WithConnectionString("localhost:6379"),
+
+        "Testing" => new InProcessTransportConfiguration(),
+
+        "Production" => new AzureServiceBusTransportConfiguration()
+            .WithConnectionString(config["AzureServiceBus:ConnectionString"]),
+
+        _ => throw new InvalidOperationException($"Unknown environment: {environment}")
+    };
+
+    return new BusBuilder()
+        .Configure()
+        .WithTransport(transportConfig)
+        .WithNames("MyApp", Environment.MachineName)
+        .WithTypesFrom(typeProvider)
+        .WithAutofacDefaults(container.BeginLifetimeScope())
+        .WithJsonSerializer()
+        .Build();
+}
+```
+
+## Complete Configuration Example
+
+```csharp
+using Autofac;
+using Nimbus;
+using Nimbus.Configuration;
+using Nimbus.Containers.Autofac;
+using Nimbus.Logger.Serilog;
+using Nimbus.Serializers.Json;
+using Nimbus.Transports.Redis;
+using Serilog;
+
+public class NimbusConfiguration
+{
+    public static async Task<IBus> CreateAndStartBus()
+    {
+        // 1. Set up logging
+        Log.Logger = new LoggerConfiguration()
+            .WriteTo.Console()
+            .CreateLogger();
+
+        // 2. Set up DI container
+        var builder = new ContainerBuilder();
+        builder.RegisterAssemblyTypes(typeof(Program).Assembly)
+               .AsImplementedInterfaces();
+        var container = builder.Build();
+
+        // 3. Create type provider
+        var typeProvider = new AssemblyScanningTypeProvider(
+            typeof(Program).Assembly
+        );
+
+        // 4. Configure the bus
+        var bus = new BusBuilder()
+            .Configure()
+            .WithTransport(new RedisTransportConfiguration()
+                .WithConnectionString("localhost:6379"))
+            .WithNames("MyApplication", Environment.MachineName)
+            .WithTypesFrom(typeProvider)
+            .WithAutofacDefaults(container.BeginLifetimeScope())
+            .WithJsonSerializer()
+            .WithSerilogLogger(Log.Logger)
+            .WithHeartbeatInterval(TimeSpan.FromSeconds(30)) // Optional
+            .WithGlobalInboundInterceptor(new MyLoggingInterceptor()) // Optional
+            .Build();
+
+        // 5. Start the bus
+        await bus.Start();
+
+        return bus;
+    }
+}
+```
+
+## Next Steps
+
+- **[Architecture Overview](/docs/architecture)** - Understand how Nimbus works internally
+- **[Message Patterns](/docs/architecture/message-patterns)** - Learn about commands, events, and requests
+- **[Transports](/docs/transports)** - Dive deeper into transport-specific features

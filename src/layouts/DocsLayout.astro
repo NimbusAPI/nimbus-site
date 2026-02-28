@@ -1,0 +1,55 @@
+---
+import BaseLayout from './BaseLayout.astro';
+import Header from '../components/layout/Header.astro';
+import Footer from '../components/layout/Footer.astro';
+import DocsSidebar from '../components/layout/DocsSidebar.astro';
+import TableOfContents from '../components/layout/TableOfContents.astro';
+
+interface Props {
+  frontmatter: {
+    title: string;
+    description: string;
+    category?: string;
+  };
+  headings?: any[];
+}
+
+const { frontmatter, headings = [] } = Astro.props;
+const currentSlug = Astro.url.pathname.replace('/docs/', '').replace(/\/$/, '');
+---
+
+<BaseLayout title={frontmatter.title} description={frontmatter.description}>
+  <Header />
+
+  <div class="flex max-w-screen-2xl mx-auto">
+    <!-- Sidebar -->
+    <DocsSidebar currentSlug={currentSlug} />
+
+    <!-- Main Content -->
+    <main class="flex-1 min-w-0 px-8 py-12">
+      <article class="prose prose-gray max-w-3xl mx-auto">
+        <h1 class="text-4xl font-bold text-gray-900 mb-4">{frontmatter.title}</h1>
+        <p class="text-lg text-gray-600 mb-8">{frontmatter.description}</p>
+
+        <slot />
+      </article>
+
+      <!-- Edit on GitHub -->
+      <div class="max-w-3xl mx-auto mt-12 pt-8 border-t border-gray-200">
+        <a
+          href={`https://github.com/NimbusAPI/Nimbus/edit/develop/docs/${currentSlug}.mdx`}
+          target="_blank"
+          rel="noopener noreferrer"
+          class="text-sm text-gray-600 hover:text-blue-600 transition-colors"
+        >
+          Edit this page on GitHub →
+        </a>
+      </div>
+    </main>
+
+    <!-- Table of Contents -->
+    <TableOfContents headings={headings} />
+  </div>
+
+  <Footer />
+</BaseLayout>

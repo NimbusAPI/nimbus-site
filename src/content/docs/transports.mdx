@@ -1,0 +1,581 @@
+---
+title: "Transports Overview"
+description: "Overview of available messaging transports and how to choose the right one"
+category: "transports"
+order: 1
+---
+
+import Callout from '@components/ui/Callout.astro';
+import Card from '@components/ui/Card.astro';
+import CodeBlock from '@components/ui/CodeBlock.astro';
+
+## Available Transports
+
+Nimbus supports multiple messaging transports, each with different characteristics and use cases:
+
+<div class="grid grid-cols-1 md:grid-cols-2 gap-6 my-6">
+  <Card title="Azure Service Bus" icon="☁️">
+    **Enterprise-grade** cloud messaging service from Microsoft Azure.
+
+    - Fully managed, highly reliable
+    - Advanced features (scheduled messages, dead-lettering, sessions)
+    - Best for production cloud deployments
+    - Requires Azure subscription
+
+    [Learn more →](/docs/transports/azure-service-bus)
+  </Card>
+
+  <Card title="Redis" icon="⚡">
+    **High-performance** in-memory data store with pub/sub capabilities.
+
+    - Extremely fast, low latency
+    - Simple setup and operation
+    - Great for high-throughput scenarios
+    - Less durability guarantees than message queues
+
+    [Learn more →](/docs/transports/redis)
+  </Card>
+
+  <Card title="AMQP" icon="🔧">
+    **AMQP 1.0 transport** optimized for ActiveMQ Artemis.
+
+    - Self-hosted, full control
+    - Open standard AMQP 1.0 protocol
+    - Works with any AMQP broker
+    - Optimized for ActiveMQ Artemis
+    - Good for on-premises deployments
+
+    [Learn more →](/docs/transports/amqp)
+  </Card>
+
+  <Card title="SQL Server" icon="🗄️">
+    **Database-backed** transport using your existing SQL Server instance.
+
+    - No additional broker required
+    - Atomic dequeue, concurrent consumers
+    - Scheduled delivery and dead letters
+    - Great for apps already on SQL Server
+
+    [Learn more →](/docs/transports/sql-server)
+  </Card>
+
+  <Card title="PostgreSQL" icon="🐘">
+    **Database-backed** transport using your existing PostgreSQL instance.
+
+    - No additional broker required
+    - `FOR UPDATE SKIP LOCKED` for safe concurrency
+    - Works with Supabase, Neon, RDS, Cloud SQL
+    - Great for apps already on PostgreSQL
+
+    [Learn more →](/docs/transports/postgres)
+  </Card>
+
+  <Card title="In-Process" icon="🔬">
+    **Memory-based** transport for testing and development.
+
+    - No external dependencies
+    - Perfect for unit and integration tests
+    - Fast local development
+    - Not suitable for production
+
+    [Learn more →](/docs/transports/in-process)
+  </Card>
+</div>
+
+## Transport Comparison
+
+| Feature | Azure Service Bus | Redis | AMQP | SQL Server | PostgreSQL | In-Process |
+|---------|------------------|-------|------|------------|------------|------------|
+| **Deployment** | Cloud (Azure) | Self-hosted or Cloud | Self-hosted | Existing DB | Existing DB | N/A |
+| **Extra infra required** | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **Durability** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐ |
+| **Performance** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐⭐⭐ |
+| **Setup Complexity** | ⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ |
+| **Cost** | Pay per use | Free (self-host) | Free (self-host) | Existing DB cost | Existing DB cost | Free |
+| **Message delivery** | Push | Push | Push | Polling | Polling | In-memory |
+| **Message Size** | 256KB / 1MB | 512MB | 100MB+ | VARBINARY(MAX) | BYTEA | Unlimited |
+
+## Choosing a Transport
+
+### For Production
+
+**Azure Service Bus** if you:
+- Run on Azure cloud
+- Need enterprise-grade reliability
+- Want managed infrastructure
+- Require advanced features (sessions, scheduled messages, transactions)
+- Have budget for cloud services
+
+<CodeBlock title="Configure Azure Service Bus Transport">
+```csharp
+var transport = new AzureServiceBusTransportConfiguration()
+    .WithConnectionString(azureConnectionString)
+    .WithDefaultTimeout(TimeSpan.FromSeconds(30))
+    .WithMaxConcurrentCalls(10);
+```
+</CodeBlock>
+
+**Redis** if you:
+- Need maximum performance and low latency
+- Have high message throughput requirements
+- Can accept slightly lower durability guarantees
+- Already use Redis in your infrastructure
+- Want simple, fast pub/sub
+
+<CodeBlock title="Configure Redis Transport">
+```csharp
+var transport = new RedisTransportConfiguration()
+    .WithConnectionString("localhost:6379")
+    .WithDatabase(0);
+```
+</CodeBlock>
+
+**AMQP** if you:
+- Run on-premises or private cloud
+- Need full control over infrastructure
+- Want AMQP 1.0 standard protocol
+- Have existing AMQP/Artemis infrastructure
+- Want open-source solutions
+
+<CodeBlock title="Configure AMQP Transport">
+```csharp
+var transport = new AMQPTransportConfiguration()
+    .WithBrokerUri("amqp://localhost:5672")
+    .WithCredentials("admin", "admin")
+    .WithConnectionPoolSize(10);
+```
+</CodeBlock>
+
+**SQL Server** if you:
+- Already have SQL Server in your stack
+- Want messaging without additional infrastructure
+- Need strong durability backed by your existing DB
+- Are running on-premises or using Azure SQL
+
+<CodeBlock title="Configure SQL Server Transport">
+```csharp
+var transport = new SqlServerTransportConfiguration()
+    .WithConnectionString("Server=localhost;Database=Nimbus;Integrated Security=true;")
+    .WithAutoCreateSchema();
+```
+</CodeBlock>
+
+**PostgreSQL** if you:
+- Already have PostgreSQL in your stack
+- Want messaging without additional infrastructure
+- Use a managed PostgreSQL service (Supabase, Neon, RDS, Cloud SQL)
+- Prefer PostgreSQL's `FOR UPDATE SKIP LOCKED` concurrency model
+
+<CodeBlock title="Configure PostgreSQL Transport">
+```csharp
+var transport = new PostgresTransportConfiguration()
+    .WithConnectionString("Host=localhost;Database=nimbus;Username=postgres;Password=secret")
+    .WithAutoCreateSchema();
+```
+</CodeBlock>
+
+### For Development & Testing
+
+**In-Process** for:
+- Unit tests
+- Integration tests
+- Local development
+- Quick prototyping
+
+<CodeBlock title="Configure In-Process Transport">
+```csharp
+var transport = new InProcessTransportConfiguration();
+```
+</CodeBlock>
+
+<Callout type="tip">
+**Development Strategy**: Use in-process transport for development and tests, then switch to your production transport by changing configuration only. Your application code remains unchanged.
+</Callout>
+
+## Feature Support Matrix
+
+### Core Features
+
+| Feature | Azure Service Bus | Redis | AMQP | SQL Server | PostgreSQL | In-Process |
+|---------|------------------|-------|------|------------|------------|------------|
+| Commands | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Events (Competing) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Events (Multicast) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Requests | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Multicast Requests | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+
+### Advanced Features
+
+| Feature | Azure Service Bus | Redis | AMQP | SQL Server | PostgreSQL | In-Process |
+|---------|------------------|-------|------|------------|------------|------------|
+| **Scheduled Delivery** | ✅ Native | ⚠️ Polling | ✅ Native | ✅ `visible_after` | ✅ `visible_after` | ✅ Full support |
+| **Message TTL** | ✅ Native | ✅ Native | ✅ Native | ✅ `expires_at` | ✅ `expires_at` | ✅ Simulated |
+| **Dead Letter Queue** | ✅ Native | ⚠️ Manual | ✅ Native | ✅ DB table | ✅ DB table | ⚠️ Manual |
+| **Large Messages** | ✅ Blob store | ❌ | ✅ Blob store | ❌ | ❌ | ✅ |
+| **Transactions** | ✅ Full support | ⚠️ Limited | ✅ Full support | ❌ | ❌ | ✅ |
+| **Sessions** | ✅ Full support | ❌ | ✅ Full support | ❌ | ❌ | ❌ |
+| **Duplicate Detection** | ✅ Native | ⚠️ Manual | ⚠️ Manual | ⚠️ Manual | ⚠️ Manual | ⚠️ Manual |
+| **Encryption at rest** | ✅ Native | ⚠️ Manual | ⚠️ Manual | ✅ TDE | ✅ Native | ❌ |
+
+## Performance Characteristics
+
+### Throughput
+
+**High Throughput** (10,000+ msgs/sec):
+- Redis (in-memory, minimal overhead)
+- In-Process (no serialization or network)
+
+**Medium-High Throughput** (1,000-10,000 msgs/sec):
+- Azure Service Bus (premium tier)
+- AMQP brokers (with tuning)
+
+**Medium Throughput** (100-1,000 msgs/sec):
+- Azure Service Bus (standard tier)
+- AMQP brokers (standard config)
+- SQL Server / PostgreSQL (with tuned poll interval and indexing)
+
+### Latency
+
+**Ultra-Low** (sub 1ms):
+- In-Process
+
+**Low** (1-10ms):
+- Redis
+
+**Medium** (10-50ms):
+- Azure Service Bus
+- AMQP brokers (Artemis, etc.)
+
+**Poll-interval-dependent** (configurable, default ~1s):
+- SQL Server
+- PostgreSQL
+
+<Callout type="info">
+**Latency vs. Reliability Trade-off**: Faster transports (Redis, In-Process) may have lower durability guarantees. Slower transports (Azure Service Bus) provide stronger reliability guarantees.
+</Callout>
+
+## Message Size Limits
+
+### Azure Service Bus
+- **Standard tier**: 256 KB per message
+- **Premium tier**: 1 MB per message
+- Use [large message support](/docs/advanced/large-messages) for bigger payloads
+
+### Redis
+- Theoretical limit: 512 MB
+- Practical limit: ~100 MB (performance degrades)
+- Recommended: < 1 MB per message
+
+### AMQP (ActiveMQ Artemis)
+- Default: 100 MB (configurable)
+- Broker-dependent limits
+- Large message support available
+
+### SQL Server
+- `VARBINARY(MAX)`: up to 2 GB per message
+- Practical limit: keep messages small for performance
+- No external large message store support
+
+### PostgreSQL
+- `BYTEA`: no hard limit (governed by available memory)
+- Practical limit: keep messages small for performance
+- No external large message store support
+
+### In-Process
+- No practical limit (memory-based)
+- Recommended: Keep messages small for consistency with other transports
+
+## Reliability and Durability
+
+### At-Least-Once Delivery
+
+All transports support at-least-once delivery:
+- Messages are acknowledged only after successful processing
+- Failed messages are retried
+- Handlers must be idempotent
+
+### Exactly-Once Semantics
+
+For exactly-once processing, you need:
+
+**Application-level deduplication**:
+```csharp
+public class IdempotentPlaceOrderHandler : IHandleCommand<PlaceOrderCommand>
+{
+    private readonly IOrderRepository _repository;
+
+    public async Task Handle(PlaceOrderCommand command)
+    {
+        // Check if order already exists (idempotency)
+        if (await _repository.OrderExists(command.OrderId))
+        {
+            // Already processed, skip
+            return;
+        }
+
+        await _repository.CreateOrder(command);
+    }
+}
+```
+
+**Azure Service Bus**: Built-in duplicate detection (with sessions)
+**Other transports**: Manual deduplication required
+
+### Message Persistence
+
+**Azure Service Bus**:
+- All messages persisted to storage
+- Survives broker restarts
+- Geo-redundant storage available
+
+**Redis**:
+- Messages in memory by default
+- Optional persistence (RDB snapshots, AOF log)
+- Risk of message loss on server crash
+
+**AMQP (ActiveMQ Artemis)**:
+- Configurable persistence (journal-based)
+- Durable subscriptions available
+- Survives broker restarts with proper configuration
+
+**SQL Server**:
+- Full ACID durability — messages stored in database tables
+- Survives application restarts and server reboots
+- Inherits whatever HA/DR you've configured for SQL Server
+
+**PostgreSQL**:
+- Full ACID durability — messages stored in database tables
+- Survives application restarts and server reboots
+- Inherits whatever HA/DR you've configured for PostgreSQL
+
+**In-Process**:
+- No persistence
+- Messages lost on application restart
+- For testing only
+
+## Operational Considerations
+
+### Monitoring
+
+**Azure Service Bus**:
+- Azure Monitor integration
+- Metrics: Queue depth, throughput, errors
+- Alerts and diagnostics built-in
+
+**Redis**:
+- Redis INFO command
+- Third-party monitoring (RedisInsight, Prometheus)
+- Custom metrics via application
+
+**AMQP (ActiveMQ Artemis)**:
+- JMX monitoring
+- Web console included
+- Management API available
+
+**SQL Server / PostgreSQL**:
+- Query `nimbus_messages` / `NimbusMessages` for queue depths
+- Query `nimbus_dead_letters` / `NimbusDeadLetters` for failure counts
+- Standard DB monitoring tools (Azure Monitor, pgAdmin, Datadog, etc.)
+
+**In-Process**:
+- Custom instrumentation only
+- Not intended for production monitoring
+
+### Scaling
+
+**Horizontal Scaling**:
+- All transports support multiple consumer instances
+- Messages distributed across instances
+- Add/remove instances as needed
+
+**Vertical Scaling**:
+- **Azure Service Bus**: Upgrade to premium tier
+- **Redis**: Use Redis Cluster
+- **AMQP**: Clustering and failover
+- **SQL Server / PostgreSQL**: Scale up the database; reduce poll interval for lower latency
+- **In-Process**: Add more threads (limited)
+
+### High Availability
+
+**Azure Service Bus**:
+- Automatic failover
+- Zone redundancy available
+- 99.9% SLA (standard), 99.95% (premium)
+
+**Redis**:
+- Redis Sentinel for automatic failover
+- Redis Cluster for sharding
+- Manual setup required
+
+**AMQP (ActiveMQ Artemis)**:
+- Master-slave configuration
+- Clustering support
+- Manual setup and maintenance
+
+**SQL Server**:
+- Always On Availability Groups, failover cluster instances
+- Inherits your existing SQL Server HA setup
+
+**PostgreSQL**:
+- Streaming replication, Patroni, pgBouncer
+- Managed HA via Supabase, RDS Multi-AZ, Cloud SQL HA
+
+**In-Process**:
+- Single process only
+- No HA capabilities
+
+## Cost Considerations
+
+### Azure Service Bus
+- **Pricing model**: Pay per operation + monthly base fee
+- **Standard tier**: ~$10/month + $0.05 per million operations
+- **Premium tier**: ~$670/month (1 messaging unit) + data transfer
+- **Best for**: Production workloads, enterprise applications
+
+### Redis
+- **Self-hosted**: Server costs only
+- **Managed (Azure, AWS)**: ~$15-100/month depending on size
+- **Best for**: High-volume, cost-sensitive applications
+
+### AMQP (ActiveMQ Artemis)
+- **Self-hosted**: Server and maintenance costs
+- **Best for**: On-premises deployments, full control requirements, open standards
+
+### SQL Server
+- **Self-hosted**: No additional cost beyond existing SQL Server licence
+- **Managed (Azure SQL, RDS)**: Included in existing DB cost
+- **Best for**: Teams already running SQL Server who want zero new infrastructure
+
+### PostgreSQL
+- **Self-hosted**: No additional cost beyond existing PostgreSQL instance
+- **Managed (Supabase, Neon, RDS, Cloud SQL)**: Included in existing DB cost
+- **Best for**: Teams already running PostgreSQL who want zero new infrastructure
+
+### In-Process
+- **Cost**: Free
+- **Best for**: Development and testing only
+
+## Migration Between Transports
+
+Thanks to Nimbus's transport abstraction, you can migrate between transports with minimal code changes:
+
+```csharp
+// Before: Redis
+var bus = new BusBuilder()
+    .Configure()
+    .WithTransport(new RedisTransportConfiguration()
+        .WithConnectionString("localhost:6379"))
+    .WithNames("OrderService", Environment.MachineName)
+    .Build();
+
+// After: Azure Service Bus (same application code!)
+var bus = new BusBuilder()
+    .Configure()
+    .WithTransport(new AzureServiceBusTransportConfiguration()
+        .WithConnectionString(azureConnectionString))
+    .WithNames("OrderService", Environment.MachineName)
+    .Build();
+```
+
+<Callout type="warning">
+**Migration Checklist**:
+1. Test thoroughly with new transport
+2. Verify feature compatibility
+3. Update monitoring and alerting
+4. Plan for message migration or cutover
+5. Have rollback plan ready
+</Callout>
+
+## Quick Start by Transport
+
+### Azure Service Bus
+
+```bash
+# Install package
+dotnet add package Nimbus.AzureServiceBus
+```
+
+```csharp
+var transport = new AzureServiceBusTransportConfiguration()
+    .WithConnectionString("Endpoint=sb://...")
+    .WithDefaultTimeout(TimeSpan.FromSeconds(30));
+```
+
+[Full guide →](/docs/transports/azure-service-bus)
+
+### Redis
+
+```bash
+# Install package
+dotnet add package Nimbus.Redis
+```
+
+```csharp
+var transport = new RedisTransportConfiguration()
+    .WithConnectionString("localhost:6379");
+```
+
+[Full guide →](/docs/transports/redis)
+
+### AMQP
+
+```bash
+# Install package
+dotnet add package Nimbus.Transports.AMQP
+```
+
+```csharp
+var transport = new AMQPTransportConfiguration()
+    .WithBrokerUri("amqp://localhost:5672")
+    .WithCredentials("admin", "admin")
+    .WithConnectionPoolSize(10);
+```
+
+[Full guide →](/docs/transports/amqp)
+
+### SQL Server
+
+```bash
+dotnet add package Nimbus.Transports.SqlServer
+```
+
+```csharp
+var transport = new SqlServerTransportConfiguration()
+    .WithConnectionString("Server=localhost;Database=Nimbus;Integrated Security=true;")
+    .WithAutoCreateSchema();
+```
+
+[Full guide →](/docs/transports/sql-server)
+
+### PostgreSQL
+
+```bash
+dotnet add package Nimbus.Transports.Postgres
+```
+
+```csharp
+var transport = new PostgresTransportConfiguration()
+    .WithConnectionString("Host=localhost;Database=nimbus;Username=postgres;Password=secret")
+    .WithAutoCreateSchema();
+```
+
+[Full guide →](/docs/transports/postgres)
+
+### In-Process
+
+```bash
+# Install package (included in core)
+dotnet add package Nimbus
+```
+
+```csharp
+var transport = new InProcessTransportConfiguration();
+```
+
+[Full guide →](/docs/transports/in-process)
+
+## Next Steps
+
+- Choose your transport and follow the detailed setup guide
+- Learn about [transport abstraction](/docs/architecture/transport-abstraction) principles
+- Explore [advanced features](/docs/advanced/interceptors) available across transports

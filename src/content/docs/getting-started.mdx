@@ -1,0 +1,145 @@
+---
+title: "Introduction to Nimbus"
+description: "Get started with Nimbus, a .NET messaging framework that provides transport-agnostic messaging infrastructure."
+category: "getting-started"
+order: 1
+---
+
+import Callout from '@components/ui/Callout.astro';
+import Card from '@components/ui/Card.astro';
+
+## What is Nimbus?
+
+Nimbus is a .NET messaging framework that provides an abstraction layer over various messaging transports. Write your messaging code once, and run it on Azure Service Bus, Redis, AMQP (ActiveMQ Artemis), or any other supported transport without changing your application code.
+
+<Callout type="info">
+**Transport-Agnostic**: Switch between messaging transports without rewriting your code. Perfect for development, testing, and production scenarios.
+</Callout>
+
+## Core Concepts
+
+Nimbus implements message-based communication patterns:
+
+<div class="grid grid-cols-1 md:grid-cols-2 gap-4 my-6">
+  <Card title="Commands" icon="⚡">
+    Fire-and-forget messages sent to a single handler for processing actions.
+  </Card>
+
+  <Card title="Events" icon="📡">
+    Pub/sub messages that notify subscribers about things that have happened.
+  </Card>
+
+  <Card title="Requests" icon="🔄">
+    Request/response pattern for querying data or getting computed results.
+  </Card>
+
+  <Card title="Multicast Requests" icon="📬">
+    Send one request, receive multiple responses from different handlers.
+  </Card>
+</div>
+
+## Quick Start
+
+Here's a minimal example showing how to send and handle a command:
+
+```csharp
+using Nimbus;
+using Nimbus.Configuration;
+using Nimbus.Handlers;
+using Nimbus.MessageContracts;
+
+// 1. Define your message
+public class PlaceOrderCommand : IBusCommand
+{
+    public string OrderId { get; set; }
+    public decimal Amount { get; set; }
+}
+
+// 2. Create a handler
+public class PlaceOrderHandler : IHandleCommand<PlaceOrderCommand>
+{
+    public async Task Handle(PlaceOrderCommand command)
+    {
+        Console.WriteLine($"Processing order {command.OrderId} for ${command.Amount}");
+        // Your business logic here
+    }
+}
+
+// 3. Configure the bus
+var bus = new BusBuilder()
+    .Configure()
+    .WithTransport(new RedisTransportConfiguration()
+        .WithConnectionString("localhost:6379"))
+    .WithNames("MyApp", Environment.MachineName)
+    .WithTypesFrom(typeProvider)
+    .WithAutofacDefaults(componentContext)
+    .Build();
+
+// 4. Send a command
+await bus.Send(new PlaceOrderCommand
+{
+    OrderId = "ORD-12345",
+    Amount = 99.99m
+});
+```
+
+<Callout type="tip">
+Check out the [Cafe Application example](/docs/examples/cafe-application) to see a complete multi-service application using Nimbus.
+</Callout>
+
+## Supported Transports
+
+Nimbus supports multiple messaging transports:
+
+- **Azure Service Bus** - Enterprise-grade cloud messaging
+- **Redis** - Fast, in-memory messaging for development and production
+- **AMQP** - Open standard AMQP 1.0 transport, tested with ActiveMQ Artemis
+- **In-Process** - In-memory transport perfect for testing
+
+<Callout type="info">
+All transports implement the same `INimbusTransport` interface, making them completely interchangeable in your code.
+</Callout>
+
+## Key Features
+
+### Dependency Injection
+Seamless integration with Autofac and other DI containers. Handlers and their dependencies are resolved from your container.
+
+### Routing
+Flexible routing strategies that determine how messages map to queues and topics.
+
+### Interceptors
+Add cross-cutting concerns like logging, metrics, and validation using inbound and outbound interceptors.
+
+### Serialization
+Choose between DataContract serialization (default) or JSON serialization, or bring your own serializer.
+
+### Large Messages
+Automatically handle large messages by storing payloads in Azure Blob Storage.
+
+## Next Steps
+
+<div class="grid grid-cols-1 md:grid-cols-2 gap-4 my-6">
+  <Card title="Installation">
+    Install Nimbus from NuGet and set up your first project.
+    <a href="/docs/getting-started/installation" class="text-blue-600 hover:underline mt-2 inline-block">
+      Install Nimbus →
+    </a>
+  </Card>
+
+  <Card title="First Message">
+    Send your first message in 5 minutes with our step-by-step guide.
+    <a href="/docs/getting-started/first-message" class="text-blue-600 hover:underline mt-2 inline-block">
+      Send a Message →
+    </a>
+  </Card>
+</div>
+
+## Architecture
+
+Want to understand how Nimbus works under the hood? Check out the [Architecture Overview](/docs/architecture) to learn about:
+
+- Message flow and dispatching
+- Transport abstraction design
+- Routing and type resolution
+- Dependency injection patterns

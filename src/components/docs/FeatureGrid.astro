@@ -1,0 +1,59 @@
+---
+const features = [
+  {
+    title: 'Transport Abstraction',
+    description: 'Write once, run anywhere. Switch between Azure Service Bus, Redis, AMQP, or InProcess without changing your application code.',
+    href: '/docs/architecture/transport-abstraction',
+    iconPath: 'M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5',
+  },
+  {
+    title: 'Message Patterns',
+    description: 'Built-in support for Commands, Events (competing & multicast), Requests, and Multicast Requests.',
+    href: '/docs/architecture/message-patterns',
+    iconPath: 'M21.75 6.75v10.5a2.25 2.25 0 0 1-2.25 2.25h-15a2.25 2.25 0 0 1-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25m19.5 0v.243a2.25 2.25 0 0 1-1.07 1.916l-7.5 4.615a2.25 2.25 0 0 1-2.36 0L3.32 8.91a2.25 2.25 0 0 1-1.07-1.916V6.75',
+  },
+  {
+    title: 'DI Integration',
+    description: 'Seamless integration with Autofac and other dependency injection containers. Handlers are resolved per-message.',
+    href: '/docs/guides/autofac-integration',
+    iconPath: 'M3.75 6A2.25 2.25 0 0 1 6 3.75h2.25A2.25 2.25 0 0 1 10.5 6v2.25a2.25 2.25 0 0 1-2.25 2.25H6a2.25 2.25 0 0 1-2.25-2.25V6ZM3.75 15.75A2.25 2.25 0 0 1 6 13.5h2.25a2.25 2.25 0 0 1 2.25 2.25V18a2.25 2.25 0 0 1-2.25 2.25H6A2.25 2.25 0 0 1 3.75 18v-2.25ZM13.5 6a2.25 2.25 0 0 1 2.25-2.25H18A2.25 2.25 0 0 1 20.25 6v2.25A2.25 2.25 0 0 1 18 10.5h-2.25a2.25 2.25 0 0 1-2.25-2.25V6ZM13.5 15.75a2.25 2.25 0 0 1 2.25-2.25H18a2.25 2.25 0 0 1 2.25 2.25V18A2.25 2.25 0 0 1 18 20.25h-2.25A2.25 2.25 0 0 1 13.5 18v-2.25Z',
+  },
+  {
+    title: 'Routing & Dispatching',
+    description: 'Flexible routing strategies and automatic message dispatching to the correct handlers.',
+    href: '/docs/architecture/routing',
+    iconPath: 'M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15',
+  },
+  {
+    title: 'Interceptors',
+    description: 'Add cross-cutting concerns — logging, metrics, validation — using inbound and outbound interceptors.',
+    href: '/docs/advanced/interceptors',
+    iconPath: 'M12 3c2.755 0 5.455.232 8.083.678.533.09.917.556.917 1.096v1.044a2.25 2.25 0 0 1-.659 1.591l-5.432 5.432a2.25 2.25 0 0 0-.659 1.591v2.927a2.25 2.25 0 0 1-1.244 2.013L9.75 21v-6.568a2.25 2.25 0 0 0-.659-1.591L3.659 7.409A2.25 2.25 0 0 1 3 5.818V4.774c0-.54.384-1.006.917-1.096A48.32 48.32 0 0 1 12 3Z',
+  },
+  {
+    title: 'Serialization',
+    description: 'DataContract or JSON serialization out of the box, with a simple interface for custom serializers.',
+    href: '/docs/advanced/serialization',
+    iconPath: 'M17.25 6.75 22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3-4.5 16.5',
+  },
+];
+---
+
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 my-12">
+  {features.map((feature) => (
+    <a
+      href={feature.href}
+      class="group flex flex-col gap-3 bg-white border border-gray-200 rounded-xl p-6 hover:border-blue-300 hover:shadow-md transition-all duration-200 no-underline"
+    >
+      <div class="w-9 h-9 rounded-lg bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 shrink-0 group-hover:bg-blue-100 transition-colors">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4.5 h-4.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d={feature.iconPath} />
+        </svg>
+      </div>
+      <div>
+        <h3 class="text-sm font-semibold text-gray-900 mb-1 group-hover:text-blue-600 transition-colors">{feature.title}</h3>
+        <p class="text-sm text-gray-500 leading-relaxed">{feature.description}</p>
+      </div>
+    </a>
+  ))}
+</div>

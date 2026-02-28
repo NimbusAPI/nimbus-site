@@ -1,0 +1,522 @@
+---
+title: "PostgreSQL"
+description: "Use Nimbus with PostgreSQL as a message transport — no additional broker required"
+category: "transports"
+order: 6
+---
+
+import Callout from '@components/ui/Callout.astro';
+
+## Overview
+
+The Nimbus PostgreSQL transport uses an existing PostgreSQL database as a message broker. Messages are stored in database tables and delivered via polling, making it a great choice for applications that already rely on PostgreSQL and want to add messaging without introducing a separate infrastructure component.
+
+<Callout type="info">
+**No broker required**: This transport runs entirely within your existing PostgreSQL instance. No message broker installation or management is needed.
+</Callout>
+
+## Key Benefits
+
+- **Zero additional infrastructure**: Uses your existing PostgreSQL database
+- **Atomic delivery**: Messages are dequeued with `FOR UPDATE SKIP LOCKED` — no duplicates, no blocking
+- **Concurrent consumers**: Multiple consumers can drain the same queue in parallel without coordination
+- **Scheduled delivery**: Built-in support for delayed and scheduled messages via `visible_after`
+- **Dead letter office**: Failed messages are tracked in a dedicated table
+- **Auto schema creation**: Tables can be created automatically on startup
+- **FIFO ordering**: Messages delivered in temporal order within each queue
+
+## When to Use PostgreSQL
+
+**Great for**:
+- Applications already backed by PostgreSQL
+- Environments where adding a message broker is not an option
+- Lower-throughput workloads where simplicity matters
+- Local development and testing without a separate broker
+- Supabase, Neon, RDS, Cloud SQL, or any managed PostgreSQL service
+
+**Consider alternatives if**:
+- You need very high message throughput (use Redis or Azure Service Bus)
+- You want a fully managed cloud messaging service (use Azure Service Bus)
+- You need open-protocol interoperability (use AMQP)
+
+## Installation
+
+```bash
+dotnet add package Nimbus.Transports.Postgres
+```
+
+## Quick Start
+
+### Basic Configuration
+
+```csharp
+using Nimbus;
+using Nimbus.Configuration;
+using Nimbus.Transports.Postgres;
+
+var transport = new PostgresTransportConfiguration()
+    .WithConnectionString("Host=localhost;Database=nimbus;Username=postgres;Password=secret")
+    .WithAutoCreateSchema();
+
+var bus = new BusBuilder()
+    .Configure()
+    .WithNames("OrderService", Environment.MachineName)
+    .WithTransport(transport)
+    .WithTypesFrom(typeProvider)
+    .WithAutofacDefaults(container)
+    .Build();
+
+await bus.Start();
+```
+
+### Send a Message
+
+```csharp
+public class PlaceOrderCommand : IBusCommand
+{
+    public string OrderId { get; set; }
+    public decimal Amount { get; set; }
+}
+
+await bus.Send(new PlaceOrderCommand
+{
+    OrderId = "ORDER-123",
+    Amount = 99.99m
+});
+```
+
+## Configuration
+
+### WithConnectionString(string connectionString)
+
+Sets the PostgreSQL connection string. This is the only required setting.
+
+```csharp
+var transport = new PostgresTransportConfiguration()
+    .WithConnectionString("Host=myserver;Database=nimbus;Username=app;Password=secret;");
+```
+
+### WithAutoCreateSchema()
+
+Instructs Nimbus to create the required database tables on startup if they do not exist. All DDL uses `CREATE TABLE IF NOT EXISTS`, making it safe to leave enabled in production.
+
+```csharp
+var transport = new PostgresTransportConfiguration()
+    .WithConnectionString("...")
+    .WithAutoCreateSchema();
+```
+
+<Callout type="warning">
+If `WithAutoCreateSchema()` is not called, the tables must be created manually before starting the bus. See the [Schema](#schema) section for the SQL script.
+</Callout>
+
+### WithPollInterval(TimeSpan pollInterval)
+
+Sets how frequently Nimbus polls for new messages. The default is **1000 ms** (1 second).
+
+```csharp
+var transport = new PostgresTransportConfiguration()
+    .WithConnectionString("...")
+    .WithPollInterval(TimeSpan.FromMilliseconds(250));  // More responsive
+```
+
+**Tuning tips**:
+- Lower values reduce latency but increase database load
+- For low-traffic services, the default 1 s is fine
+- For latency-sensitive workloads, try 100–250 ms
+- For batch-style workloads, 5–30 s may be appropriate
+
+### From Configuration
+
+```csharp
+// appsettings.json
+{
+  "Messaging": {
+    "Postgres": {
+      "ConnectionString": "Host=localhost;Database=nimbus;Username=postgres;Password=secret",
+      "PollIntervalMs": 500
+    }
+  }
+}
+
+// Program.cs
+var settings = configuration.GetSection("Messaging:Postgres");
+var transport = new PostgresTransportConfiguration()
+    .WithConnectionString(settings["ConnectionString"])
+    .WithPollInterval(TimeSpan.FromMilliseconds(int.Parse(settings["PollIntervalMs"])))
+    .WithAutoCreateSchema();
+```
+
+## Schema
+
+Nimbus uses three tables. You can let Nimbus create them automatically with `WithAutoCreateSchema()`, or create them manually using the SQL below.
+
+### nimbus_messages
+
+Stores all in-flight messages for both queues and topic subscribers.
+
+```sql
+CREATE TABLE IF NOT EXISTS nimbus_messages (
+    message_id    UUID        NOT NULL,
+    destination   TEXT        NOT NULL,
+    body          BYTEA       NOT NULL,
+    visible_after TIMESTAMPTZ NOT NULL,
+    expires_at    TIMESTAMPTZ NULL,
+    CONSTRAINT pk_nimbus_messages PRIMARY KEY (message_id)
+);
+
+CREATE INDEX IF NOT EXISTS ix_nimbus_messages_dequeue
+    ON nimbus_messages (destination, visible_after)
+    INCLUDE (expires_at);
+```
+
+- `destination` is the queue name (or subscriber queue for topics)
+- `visible_after` implements scheduled/delayed delivery
+- `expires_at` implements message TTL (nullable — NULL means no expiry)
+
+### nimbus_subscriptions
+
+Tracks which queues are subscribed to which topics.
+
+```sql
+CREATE TABLE IF NOT EXISTS nimbus_subscriptions (
+    topic_name       TEXT NOT NULL,
+    subscriber_queue TEXT NOT NULL,
+    CONSTRAINT pk_nimbus_subscriptions PRIMARY KEY (topic_name, subscriber_queue)
+);
+```
+
+Subscriptions are registered automatically when the bus starts and new subscribers are discovered.
+
+### nimbus_dead_letters
+
+Stores messages that failed all delivery attempts.
+
+```sql
+CREATE TABLE IF NOT EXISTS nimbus_dead_letters (
+    message_id           UUID        NOT NULL,
+    original_destination TEXT        NULL,
+    body                 BYTEA       NOT NULL,
+    delivery_attempts    INTEGER     NOT NULL,
+    failed_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT pk_nimbus_dead_letters PRIMARY KEY (message_id)
+);
+```
+
+## Features
+
+### Atomic Dequeue with FOR UPDATE SKIP LOCKED
+
+Messages are dequeued using a single atomic operation. The inner `SELECT` acquires a row lock; the outer `DELETE ... RETURNING` removes the row and returns it in one round-trip.
+
+```sql
+DELETE FROM nimbus_messages
+WHERE message_id = (
+    SELECT message_id FROM nimbus_messages
+    WHERE destination = @queue_name
+      AND visible_after <= now()
+      AND (expires_at IS NULL OR expires_at > now())
+    ORDER BY visible_after, message_id
+    LIMIT 1
+    FOR UPDATE SKIP LOCKED
+)
+RETURNING body;
+```
+
+`FOR UPDATE SKIP LOCKED` is the key: rows already locked by another consumer are skipped rather than waited on. This means multiple consumers can drain the same queue simultaneously with no blocking and no duplicates.
+
+### Concurrent Consumers
+
+Because `FOR UPDATE SKIP LOCKED` makes lock contention a no-op, you can scale horizontally simply by running more instances — each consumer picks up a different message without any coordination mechanism.
+
+### Scheduled Delivery
+
+Messages can be delayed or scheduled using the standard Nimbus API:
+
+```csharp
+// Deliver after a delay
+await bus.SendAfter(new RetryCommand { ... }, TimeSpan.FromMinutes(5));
+
+// Deliver at a specific time
+await bus.SendAt(new ReminderCommand { ... }, DateTimeOffset.UtcNow.AddHours(1));
+```
+
+Internally, `visible_after` is set to the scheduled time. The polling query filters out messages whose `visible_after` is in the future, so they sit invisibly in the table until the time arrives.
+
+### Topics and Fan-out
+
+When a message is published to a topic, Nimbus inserts one copy per subscriber in a single atomic `INSERT ... SELECT`:
+
+```sql
+INSERT INTO nimbus_messages (message_id, destination, body, visible_after, expires_at)
+SELECT gen_random_uuid(), subscriber_queue, @body, @visible_after, @expires_at
+FROM nimbus_subscriptions
+WHERE topic_name = @topic_name;
+```
+
+`gen_random_uuid()` generates a fresh UUID for each subscriber row, keeping the operation server-side and atomic.
+
+```csharp
+// Publish an event to all subscribers
+await bus.Publish(new OrderPlacedEvent { OrderId = "ORDER-123" });
+```
+
+### Dead Letter Office
+
+Messages that cannot be delivered are moved to `nimbus_dead_letters`. You can inspect them programmatically:
+
+```csharp
+// Inject IDeadLetterOffice
+var count = await deadLetterOffice.Count();
+var message = await deadLetterOffice.Peek();   // View without removing
+var message = await deadLetterOffice.Pop();    // Remove for re-processing
+```
+
+Dead letters are retrieved oldest-first by `failed_at` timestamp. `Pop()` also uses `FOR UPDATE SKIP LOCKED`, so it is safe to call from multiple consumers concurrently.
+
+### Message Expiry
+
+Messages can be given a time-to-live. Expired messages are filtered out during dequeue and are never delivered to handlers.
+
+## Database Setup
+
+### PostgreSQL via Docker
+
+```bash
+docker run -d \
+  --name postgres \
+  -e POSTGRES_PASSWORD=secret \
+  -e POSTGRES_DB=nimbus \
+  -p 5432:5432 \
+  postgres:16
+```
+
+Or with Docker Compose:
+
+```yaml
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: nimbus
+    ports:
+      - "5432:5432"
+```
+
+Connection string for the above:
+
+```csharp
+var transport = new PostgresTransportConfiguration()
+    .WithConnectionString("Host=localhost;Database=nimbus;Username=postgres;Password=secret")
+    .WithAutoCreateSchema();
+```
+
+### Managed PostgreSQL (Supabase, Neon, RDS, Cloud SQL)
+
+```csharp
+// Supabase (use the connection pooler URL for production)
+var transport = new PostgresTransportConfiguration()
+    .WithConnectionString(
+        "Host=db.xxxxxxxxxxxx.supabase.co;Database=postgres;" +
+        "Username=postgres;Password=secret;SSL Mode=Require;")
+    .WithAutoCreateSchema();
+```
+
+## Performance Considerations
+
+### Poll Interval vs. Latency
+
+The default 1-second poll interval means messages may be delayed up to 1 second after being sent. If lower latency is required, reduce the poll interval at the cost of more frequent database queries.
+
+| Poll interval | Message latency | DB queries/consumer/min |
+|---|---|---|
+| 100 ms | ~100 ms | 600 |
+| 250 ms | ~250 ms | 240 |
+| 1000 ms (default) | ~1 s | 60 |
+| 5000 ms | ~5 s | 12 |
+
+### Index Maintenance
+
+The `ix_nimbus_messages_dequeue` index on `(destination, visible_after)` is the hot path for message delivery. Use `VACUUM` and `ANALYZE` regularly in busy deployments, or enable `autovacuum` (on by default in PostgreSQL).
+
+### Table Bloat
+
+PostgreSQL's MVCC means deleted rows are not immediately reclaimed. Run `VACUUM` (or rely on autovacuum) to keep the `nimbus_messages` table compact in high-throughput deployments.
+
+### Message Table Growth
+
+Expired messages and dead-letter records accumulate over time. Consider a periodic cleanup job:
+
+```sql
+-- Remove expired messages older than 7 days
+DELETE FROM nimbus_messages
+WHERE expires_at IS NOT NULL AND expires_at < now() - INTERVAL '7 days';
+
+-- Archive or purge old dead letters
+DELETE FROM nimbus_dead_letters
+WHERE failed_at < now() - INTERVAL '30 days';
+```
+
+## Best Practices
+
+### 1. Use a Dedicated Database or Schema
+
+Keep Nimbus tables in a dedicated database or schema to avoid name collisions:
+
+```sql
+CREATE SCHEMA nimbus;
+-- Then prefix table names with nimbus. in the schema SQL
+```
+
+### 2. Register as a Singleton
+
+```csharp
+// ✅ GOOD: Single bus instance shared across the application
+services.AddSingleton<IBus>(provider =>
+{
+    var bus = new BusBuilder()
+        .Configure()
+        .WithNames("OrderService", Environment.MachineName)
+        .WithTransport(transport)
+        .Build();
+    bus.Start().Wait();
+    return bus;
+});
+```
+
+### 3. Least-Privilege Database User
+
+```sql
+-- Create a dedicated role
+CREATE ROLE nimbus_user LOGIN PASSWORD 'StrongPassword!';
+
+-- Grant required permissions
+GRANT SELECT, INSERT, DELETE ON nimbus_messages      TO nimbus_user;
+GRANT SELECT, INSERT, DELETE ON nimbus_subscriptions TO nimbus_user;
+GRANT SELECT, INSERT, DELETE ON nimbus_dead_letters  TO nimbus_user;
+
+-- Only if using WithAutoCreateSchema()
+GRANT CREATE ON DATABASE nimbus TO nimbus_user;
+```
+
+### 4. Monitor Dead Letters
+
+```csharp
+public class DeadLetterHealthCheck : IHealthCheck
+{
+    private readonly IDeadLetterOffice _deadLetterOffice;
+    private const int WarningThreshold = 100;
+
+    public async Task<HealthCheckResult> CheckHealthAsync(
+        HealthCheckContext context,
+        CancellationToken cancellationToken = default)
+    {
+        var count = await _deadLetterOffice.Count();
+        return count < WarningThreshold
+            ? HealthCheckResult.Healthy($"{count} dead letters")
+            : HealthCheckResult.Degraded($"{count} dead letters — investigation required");
+    }
+}
+```
+
+## Limitations
+
+### No Large Message Store
+
+All message content is stored as `BYTEA` in the database. For large payloads, use a claim-check pattern and store the data externally.
+
+### Polling-Based Delivery
+
+Messages are delivered via polling, not push. This means:
+- There is inherent latency equal to up to one poll interval
+- Database query load scales with the number of consumers and poll frequency
+
+PostgreSQL supports `LISTEN`/`NOTIFY` which could enable push-based delivery, but the current transport uses polling for simplicity and consistency with other database transports.
+
+### No Namespace Cleaning in Production
+
+`INamespaceCleanser.RemoveAllExistingNamespaceElements()` deletes all subscriptions, messages, and dead letters. It is intended for use in integration tests only.
+
+```csharp
+// ✅ Safe in tests
+await namespaceCleaner.RemoveAllExistingNamespaceElements();
+
+// ❌ Dangerous in production — deletes everything
+```
+
+## Compatibility
+
+- ✅ **PostgreSQL 12+** (for `gen_random_uuid()` without extension)
+- ✅ **PostgreSQL 9.5+** (requires `pgcrypto` extension for `gen_random_uuid()`)
+- ✅ **Supabase, Neon, RDS, Cloud SQL, Azure Database for PostgreSQL**
+- ✅ **.NET Standard 2.0+**
+- ✅ **Npgsql 9.x**
+
+## SQL Server vs PostgreSQL
+
+If you're deciding between the two database transports:
+
+| | SQL Server | PostgreSQL |
+|---|---|---|
+| **Concurrency** | `UPDLOCK, READPAST` | `FOR UPDATE SKIP LOCKED` |
+| **Fan-out UUID** | `NEWID()` in SQL | `gen_random_uuid()` in SQL |
+| **Binary column** | `VARBINARY(MAX)` | `BYTEA` |
+| **Timestamps** | `DATETIME2` | `TIMESTAMPTZ` |
+| **Table names** | `PascalCase` | `snake_case` |
+| **Managed cloud** | Azure SQL | Supabase, Neon, RDS, Cloud SQL |
+
+Both transports implement identical messaging semantics — they are drop-in replacements for each other.
+
+## Common Issues
+
+### Issue: Tables not found on startup
+
+**Solution**: Add `.WithAutoCreateSchema()` or create the tables manually.
+
+### Issue: High database CPU
+
+**Cause**: Poll interval is too low, or many consumers are polling simultaneously.
+
+**Solution**: Increase the poll interval.
+
+```csharp
+.WithPollInterval(TimeSpan.FromSeconds(2))
+```
+
+### Issue: Messages are delayed
+
+**Cause**: Poll interval is too high.
+
+**Solution**: Reduce the poll interval.
+
+```csharp
+.WithPollInterval(TimeSpan.FromMilliseconds(100))
+```
+
+### Issue: Connection refused
+
+**Cause**: Incorrect host, port, or SSL settings in connection string.
+
+**Solution**: Verify connectivity and SSL mode.
+
+```csharp
+// For servers requiring SSL
+.WithConnectionString("Host=myserver;Database=nimbus;Username=app;Password=secret;SSL Mode=Require;")
+
+// For local development without SSL
+.WithConnectionString("Host=localhost;Database=nimbus;Username=postgres;Password=secret;SSL Mode=Disable;")
+```
+
+### Issue: Table bloat after high throughput
+
+**Cause**: PostgreSQL MVCC leaves dead tuples from deleted rows.
+
+**Solution**: Ensure autovacuum is enabled (it is by default), or run `VACUUM ANALYZE nimbus_messages` manually.
+
+## Next Steps
+
+- Learn about [message patterns](/docs/architecture/message-patterns)
+- Implement [error handling](/docs/advanced/error-handling) strategies
+- Set up [monitoring and logging](/docs/guides/logging)
+- Explore [testing strategies](/docs/guides/testing)

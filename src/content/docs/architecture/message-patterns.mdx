@@ -1,0 +1,460 @@
+---
+title: "Message Patterns"
+description: "Deep dive into Nimbus messaging patterns: Commands, Events, Requests, and Multicast Requests"
+category: "architecture"
+order: 2
+---
+
+import Callout from '@components/ui/Callout.astro';
+import Card from '@components/ui/Card.astro';
+
+## Overview
+
+Nimbus implements four core messaging patterns, each designed for specific communication scenarios. Understanding when to use each pattern is crucial for building effective distributed systems.
+
+## Commands
+
+Commands represent **imperative actions** that should be performed. They are sent to a **single handler** and follow a fire-and-forget pattern (unless you need to wait for completion).
+
+### Characteristics
+
+- **One-to-one**: A command is handled by exactly one handler
+- **Queue-based**: Commands are delivered via queues for load balancing
+- **Competing consumers**: Multiple instances can process commands in parallel
+- **Action-oriented**: Named with verbs (PlaceOrder, SendEmail, ProcessPayment)
+
+### Defining a Command
+
+```csharp
+public class PlaceOrderCommand : IBusCommand
+{
+    public string OrderId { get; set; }
+    public string CustomerId { get; set; }
+    public List<OrderItem> Items { get; set; }
+    public decimal TotalAmount { get; set; }
+}
+```
+
+### Creating a Command Handler
+
+```csharp
+public class PlaceOrderHandler : IHandleCommand<PlaceOrderCommand>
+{
+    private readonly IOrderRepository _orderRepository;
+    private readonly IBus _bus;
+
+    public PlaceOrderHandler(IOrderRepository orderRepository, IBus bus)
+    {
+        _orderRepository = orderRepository;
+        _bus = bus;
+    }
+
+    public async Task Handle(PlaceOrderCommand command)
+    {
+        // Create the order
+        var order = new Order
+        {
+            Id = command.OrderId,
+            CustomerId = command.CustomerId,
+            Items = command.Items,
+            TotalAmount = command.TotalAmount,
+            Status = OrderStatus.Pending
+        };
+
+        await _orderRepository.Save(order);
+
+        // Publish an event to notify other services
+        await _bus.Publish(new OrderPlacedEvent
+        {
+            OrderId = command.OrderId,
+            CustomerId = command.CustomerId,
+            TotalAmount = command.TotalAmount
+        });
+    }
+}
+```
+
+### Sending a Command
+
+```csharp
+await bus.Send(new PlaceOrderCommand
+{
+    OrderId = Guid.NewGuid().ToString(),
+    CustomerId = "CUST-123",
+    Items = orderItems,
+    TotalAmount = 99.99m
+});
+```
+
+<Callout type="tip">
+**When to use Commands:**
+- Performing an action (place order, send email, update record)
+- When exactly one handler should process the message
+- When you need guaranteed delivery and processing
+- For task distribution across multiple workers
+</Callout>
+
+## Events
+
+Events represent **things that have happened** in your system. They are published to multiple subscribers using a pub/sub pattern.
+
+### Event Types
+
+Nimbus supports two types of events:
+
+#### Competing Events
+
+Multiple subscribers compete to handle the event (load balanced):
+
+```csharp
+public class OrderPlacedEvent : IBusEvent
+{
+    public string OrderId { get; set; }
+    public string CustomerId { get; set; }
+    public decimal TotalAmount { get; set; }
+}
+```
+
+#### Multicast Events
+
+All subscribers receive and handle the event:
+
+```csharp
+public class OrderPlacedEvent : IMulticastEvent
+{
+    public string OrderId { get; set; }
+    public string CustomerId { get; set; }
+    public decimal TotalAmount { get; set; }
+}
+```
+
+### Characteristics
+
+- **One-to-many**: Events are handled by zero or more handlers
+- **Topic-based**: Events are delivered via topics/subscriptions
+- **Decoupled**: Publishers don't know about subscribers
+- **Past tense**: Named with past-tense verbs (OrderPlaced, PaymentProcessed)
+
+### Creating Event Handlers
+
+Multiple handlers can subscribe to the same event:
+
+```csharp
+// Send confirmation email
+public class SendOrderConfirmationHandler : IHandleCompetingEvent<OrderPlacedEvent>
+{
+    private readonly IEmailService _emailService;
+
+    public async Task Handle(OrderPlacedEvent @event)
+    {
+        await _emailService.SendOrderConfirmation(@event.OrderId);
+    }
+}
+
+// Update inventory
+public class UpdateInventoryHandler : IHandleCompetingEvent<OrderPlacedEvent>
+{
+    private readonly IInventoryService _inventoryService;
+
+    public async Task Handle(OrderPlacedEvent @event)
+    {
+        await _inventoryService.ReserveItems(@event.OrderId);
+    }
+}
+
+// Track analytics
+public class TrackOrderAnalyticsHandler : IHandleMulticastEvent<OrderPlacedEvent>
+{
+    private readonly IAnalyticsService _analyticsService;
+
+    public async Task Handle(OrderPlacedEvent @event)
+    {
+        await _analyticsService.TrackOrder(@event);
+    }
+}
+```
+
+### Publishing an Event
+
+```csharp
+await bus.Publish(new OrderPlacedEvent
+{
+    OrderId = order.Id,
+    CustomerId = order.CustomerId,
+    TotalAmount = order.TotalAmount
+});
+```
+
+<Callout type="info">
+**Competing vs. Multicast Events:**
+- **Competing**: Use when only one instance needs to process (sending email, updating a record)
+- **Multicast**: Use when all subscribers must process (logging, analytics, cross-service notifications)
+</Callout>
+
+## Requests
+
+Requests implement the **request/response** pattern for querying data or performing synchronous operations.
+
+### Characteristics
+
+- **One-to-one**: A request is handled by exactly one handler
+- **Synchronous**: The caller waits for a response
+- **Query-oriented**: Perfect for "Get me X" scenarios
+- **Timeout support**: Requests can timeout if no response is received
+
+### Defining a Request
+
+```csharp
+public class GetOrderRequest : IBusRequest<GetOrderRequest, OrderDto>
+{
+    public string OrderId { get; set; }
+}
+
+public class OrderDto
+{
+    public string OrderId { get; set; }
+    public string CustomerId { get; set; }
+    public OrderStatus Status { get; set; }
+    public decimal TotalAmount { get; set; }
+    public DateTime CreatedAt { get; set; }
+}
+```
+
+### Creating a Request Handler
+
+```csharp
+public class GetOrderHandler : IHandleRequest<GetOrderRequest, OrderDto>
+{
+    private readonly IOrderRepository _orderRepository;
+
+    public GetOrderHandler(IOrderRepository orderRepository)
+    {
+        _orderRepository = orderRepository;
+    }
+
+    public async Task<OrderDto> Handle(GetOrderRequest request)
+    {
+        var order = await _orderRepository.GetById(request.OrderId);
+
+        if (order == null)
+            return null;
+
+        return new OrderDto
+        {
+            OrderId = order.Id,
+            CustomerId = order.CustomerId,
+            Status = order.Status,
+            TotalAmount = order.TotalAmount,
+            CreatedAt = order.CreatedAt
+        };
+    }
+}
+```
+
+### Sending a Request
+
+```csharp
+var response = await bus.Request<GetOrderRequest, OrderDto>(
+    new GetOrderRequest { OrderId = "ORDER-123" }
+);
+
+if (response != null)
+{
+    Console.WriteLine($"Order Status: {response.Status}");
+}
+```
+
+<Callout type="warning">
+**Request Best Practices:**
+- Use requests for queries, not commands
+- Keep request/response payloads small
+- Set appropriate timeouts
+- Handle null responses (when handler returns null)
+- Consider caching for frequently accessed data
+</Callout>
+
+## Multicast Requests
+
+Multicast requests allow you to **query multiple handlers** and gather responses from all of them.
+
+### Characteristics
+
+- **One-to-many**: Multiple handlers can respond
+- **Scatter-gather**: Collects responses from all handlers
+- **Timeout-based**: Waits for responses up to a specified timeout
+- **Partial results**: Returns responses as they arrive
+
+### Defining a Multicast Request
+
+```csharp
+public class FindAvailableDriversRequest
+    : IBusMulticastRequest<FindAvailableDriversRequest, DriverDto>
+{
+    public string PickupLocation { get; set; }
+    public DateTime RequestedTime { get; set; }
+}
+
+public class DriverDto
+{
+    public string DriverId { get; set; }
+    public string Name { get; set; }
+    public string CurrentLocation { get; set; }
+    public int EstimatedArrivalMinutes { get; set; }
+}
+```
+
+### Creating Multicast Request Handlers
+
+Each service/region can have its own handler:
+
+```csharp
+// North region handler
+public class NorthRegionDriverHandler
+    : IHandleMulticastRequest<FindAvailableDriversRequest, DriverDto>
+{
+    private readonly IDriverService _driverService;
+
+    public async Task<DriverDto> Handle(FindAvailableDriversRequest request)
+    {
+        var driver = await _driverService.FindNearestDriver(
+            request.PickupLocation, "North");
+
+        if (driver == null)
+            return null;
+
+        return new DriverDto
+        {
+            DriverId = driver.Id,
+            Name = driver.Name,
+            CurrentLocation = driver.Location,
+            EstimatedArrivalMinutes = driver.CalculateETA(request.PickupLocation)
+        };
+    }
+}
+
+// South region handler
+public class SouthRegionDriverHandler
+    : IHandleMulticastRequest<FindAvailableDriversRequest, DriverDto>
+{
+    // Similar implementation for south region
+}
+```
+
+### Sending a Multicast Request
+
+```csharp
+var timeout = TimeSpan.FromSeconds(5);
+
+var responseTasks = bus.MulticastRequest<FindAvailableDriversRequest, DriverDto>(
+    new FindAvailableDriversRequest
+    {
+        PickupLocation = "123 Main St",
+        RequestedTime = DateTime.UtcNow
+    },
+    timeout
+);
+
+// Collect all responses
+var drivers = new List<DriverDto>();
+foreach (var responseTask in responseTasks)
+{
+    try
+    {
+        var driver = await responseTask;
+        if (driver != null)
+        {
+            drivers.Add(driver);
+        }
+    }
+    catch (TimeoutException)
+    {
+        // Handler didn't respond in time
+    }
+}
+
+// Find the best driver
+var bestDriver = drivers
+    .OrderBy(d => d.EstimatedArrivalMinutes)
+    .FirstOrDefault();
+```
+
+<Callout type="tip">
+**When to use Multicast Requests:**
+- Querying distributed data across multiple services/regions
+- Finding "who can handle this?" scenarios
+- Collecting bids or quotes from multiple providers
+- Health checks across multiple nodes
+</Callout>
+
+## Pattern Selection Guide
+
+| Pattern | Use Case | Example |
+|---------|----------|---------|
+| **Command** | Perform an action | Place order, Send email, Process payment |
+| **Competing Event** | Notify of something that happened (load balanced) | Order placed, User registered, Payment received |
+| **Multicast Event** | Broadcast notification to all subscribers | System event, Audit log, Analytics tracking |
+| **Request** | Query for data | Get order details, Check inventory, Validate user |
+| **Multicast Request** | Query multiple sources | Find available drivers, Get price quotes, Check service health |
+
+## Anti-Patterns to Avoid
+
+### Don't Use Commands for Queries
+
+```csharp
+// ❌ BAD: Using a command for querying
+public class GetOrderCommand : IBusCommand
+{
+    public string OrderId { get; set; }
+}
+
+// ✅ GOOD: Use a request instead
+public class GetOrderRequest : IBusRequest<GetOrderRequest, OrderDto>
+{
+    public string OrderId { get; set; }
+}
+```
+
+### Don't Use Events for Commands
+
+```csharp
+// ❌ BAD: Using an event to trigger an action
+public class PlaceOrderEvent : IBusEvent
+{
+    public string OrderId { get; set; }
+}
+
+// ✅ GOOD: Use a command instead
+public class PlaceOrderCommand : IBusCommand
+{
+    public string OrderId { get; set; }
+}
+```
+
+### Don't Make Requests with Side Effects
+
+```csharp
+// ❌ BAD: Request handler modifies state
+public class GetOrderHandler : IHandleRequest<GetOrderRequest, OrderDto>
+{
+    public async Task<OrderDto> Handle(GetOrderRequest request)
+    {
+        var order = await _repository.GetById(request.OrderId);
+        order.LastAccessedAt = DateTime.UtcNow; // Side effect!
+        await _repository.Save(order);
+        return MapToDto(order);
+    }
+}
+
+// ✅ GOOD: Requests should be read-only
+public async Task<OrderDto> Handle(GetOrderRequest request)
+{
+    var order = await _repository.GetById(request.OrderId);
+    return MapToDto(order);
+}
+```
+
+## Next Steps
+
+- **[Transport Abstraction](/docs/architecture/transport-abstraction)** - How Nimbus remains transport-agnostic
+- **[Routing](/docs/architecture/routing)** - How messages are routed to queues and topics
+- **[Messaging Examples](/docs/messaging/commands)** - Detailed examples for each pattern

@@ -1,0 +1,67 @@
+---
+import { getCollection } from 'astro:content';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Header from '../../components/layout/Header.astro';
+import Footer from '../../components/layout/Footer.astro';
+
+const blogPosts = (await getCollection('blog'))
+  .filter(post => !post.data.draft)
+  .sort((a, b) => b.data.publishDate.getTime() - a.data.publishDate.getTime());
+---
+
+<BaseLayout title="Blog" description="Latest news and updates from the Nimbus team">
+  <Header />
+
+  <main class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+    <div class="mb-12">
+      <h1 class="text-4xl md:text-5xl font-bold text-gray-900 mb-4">Blog</h1>
+      <p class="text-lg text-gray-600">
+        Latest news, updates, and insights from the Nimbus team
+      </p>
+    </div>
+
+    <div class="space-y-8">
+      {blogPosts.map((post) => {
+        const formattedDate = post.data.publishDate.toLocaleDateString('en-US', {
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric'
+        });
+
+        return (
+          <article class="border-b border-gray-200 pb-8">
+            <a href={`/blog/${post.slug}`} class="group">
+              <h2 class="text-2xl font-bold text-gray-900 mb-2 group-hover:text-blue-600 transition-colors">
+                {post.data.title}
+              </h2>
+            </a>
+
+            <div class="flex items-center gap-3 text-sm text-gray-600 mb-3">
+              <time datetime={post.data.publishDate.toISOString()}>{formattedDate}</time>
+              {post.data.author && (
+                <>
+                  <span>•</span>
+                  <span>{post.data.author}</span>
+                </>
+              )}
+            </div>
+
+            <p class="text-gray-600 mb-4">{post.data.description}</p>
+
+            {post.data.tags && post.data.tags.length > 0 && (
+              <div class="flex flex-wrap gap-2">
+                {post.data.tags.map((tag) => (
+                  <span class="px-3 py-1 text-xs font-medium bg-blue-100 text-blue-700 rounded-full">
+                    {tag}
+                  </span>
+                ))}
+              </div>
+            )}
+          </article>
+        );
+      })}
+    </div>
+  </main>
+
+  <Footer />
+</BaseLayout>

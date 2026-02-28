@@ -1,0 +1,135 @@
+---
+title: "Installation"
+description: "Install Nimbus and its dependencies in your .NET project"
+category: "getting-started"
+order: 2
+---
+
+import Callout from '@components/ui/Callout.astro';
+
+## Prerequisites
+
+- **.NET Framework 4.6.1+** or **.NET Core 2.0+** or **.NET 5/6/7/8**
+- **NuGet Package Manager**
+
+<Callout type="info">
+Nimbus is built on .NET Standard 2.0, making it compatible with both .NET Framework and .NET Core applications.
+</Callout>
+
+## Install Core Packages
+
+Install the core Nimbus package:
+
+```bash
+dotnet add package Nimbus
+dotnet add package Nimbus.InfrastructureContracts
+dotnet add package Nimbus.MessageContracts
+```
+
+Or via Package Manager Console:
+
+```powershell
+Install-Package Nimbus
+Install-Package Nimbus.InfrastructureContracts
+Install-Package Nimbus.MessageContracts
+```
+
+## Choose a Transport
+
+Select and install one or more transport packages based on your needs:
+
+### Azure Service Bus
+
+```bash
+dotnet add package Nimbus.Transports.AzureServiceBus
+```
+
+**Use case**: Production-grade cloud messaging with enterprise features
+
+### Redis
+
+```bash
+dotnet add package Nimbus.Transports.Redis
+```
+
+**Use case**: Fast messaging for development, testing, and production scenarios
+
+### AMQP
+
+```bash
+dotnet add package Nimbus.Transports.AMQP
+```
+
+**Use case**: Open standard AMQP 1.0 transport, tested with ActiveMQ Artemis
+
+### In-Process
+
+```bash
+dotnet add package Nimbus.Transports.InProcess
+```
+
+**Use case**: Unit testing and integration testing without external dependencies
+
+<Callout type="tip">
+You can install multiple transports and switch between them using configuration. This is perfect for using InProcess in tests and Azure Service Bus in production.
+</Callout>
+
+## Additional Packages
+
+### Dependency Injection
+
+For Autofac integration:
+
+```bash
+dotnet add package Nimbus.Containers.Autofac
+```
+
+### Serialization
+
+For JSON serialization (DataContract is included by default):
+
+```bash
+dotnet add package Nimbus.Serializers.Json
+```
+
+### Logging
+
+Choose your preferred logging framework:
+
+```bash
+# For Serilog
+dotnet add package Nimbus.Logger.Serilog
+
+# For Log4net
+dotnet add package Nimbus.Logger.Log4net
+```
+
+### Large Messages
+
+For handling large messages with Azure Blob Storage:
+
+```bash
+dotnet add package Nimbus.LargeMessages.Azure
+```
+
+## Verify Installation
+
+Create a simple test to verify Nimbus is installed correctly:
+
+```csharp
+using Nimbus;
+using Nimbus.MessageContracts;
+
+public class TestCommand : IBusCommand
+{
+    public string Message { get; set; }
+}
+
+// If this compiles, Nimbus is installed correctly!
+```
+
+## Next Steps
+
+Now that Nimbus is installed, let's send your first message:
+
+→ [Send Your First Message](/docs/getting-started/first-message)

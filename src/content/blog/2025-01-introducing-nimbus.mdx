@@ -1,0 +1,152 @@
+---
+title: "Introducing Nimbus: Transport-Agnostic .NET Messaging"
+description: "Learn about Nimbus, a .NET messaging framework that lets you write code once and run it on any transport."
+publishDate: 2025-01-15
+author: "Nimbus Team"
+tags: ["announcement", "introduction", "messaging"]
+---
+
+We're excited to introduce **Nimbus**, a .NET messaging framework that provides a clean abstraction over popular messaging transports like Azure Service Bus, Redis, and ActiveMQ.
+
+## The Problem
+
+Modern applications often need to communicate asynchronously using messages. Whether you're building microservices, implementing event-driven architectures, or adding background job processing, you need a reliable messaging infrastructure.
+
+The challenge? Each messaging platform has its own API, patterns, and quirks. Code written for Azure Service Bus doesn't work with Redis. Testing with real infrastructure is slow and expensive. Switching platforms means rewriting significant portions of your application.
+
+## The Solution: Nimbus
+
+Nimbus solves this by providing a **transport-agnostic** messaging API. Write your messaging code once, and run it on any supported transport:
+
+```csharp
+// This code works with ANY transport!
+public class PlaceOrderHandler : IHandleCommand<PlaceOrderCommand>
+{
+    public async Task Handle(PlaceOrderCommand command)
+    {
+        // Your business logic here
+        Console.WriteLine($"Processing order {command.OrderId}");
+    }
+}
+
+// Configure for Redis in development
+var bus = new BusBuilder()
+    .Configure()
+    .WithTransport(new RedisTransportConfiguration()
+        .WithConnectionString("localhost"))
+    .Build();
+
+// Switch to Azure Service Bus in production - no code changes!
+var bus = new BusBuilder()
+    .Configure()
+    .WithTransport(new AzureServiceBusTransportConfiguration()
+        .WithConnectionString("your-connection-string"))
+    .Build();
+```
+
+## Key Features
+
+### 1. Transport Independence
+
+Switch between Azure Service Bus, Redis, ActiveMQ, or In-Process without changing your application code. Perfect for:
+
+- Using lightweight transports (Redis/InProcess) in development
+- Running fast tests with InProcess transport
+- Deploying to production with enterprise transports (Azure Service Bus)
+
+### 2. Rich Messaging Patterns
+
+Nimbus supports all common messaging patterns out of the box:
+
+- **Commands**: Fire-and-forget actions
+- **Events**: Pub/sub notifications with competing or multicast delivery
+- **Requests**: Request/response for queries
+- **Multicast Requests**: Query multiple services
+
+### 3. Dependency Injection
+
+Seamless integration with Autofac and other DI containers. Your handlers are resolved from the container with full dependency injection support.
+
+### 4. Interceptors
+
+Add cross-cutting concerns like logging, metrics, and validation using inbound and outbound interceptors.
+
+### 5. Flexible Serialization
+
+Choose DataContract (default, optimized for performance) or JSON serialization, or bring your own serializer.
+
+## Getting Started
+
+Install Nimbus from NuGet:
+
+```bash
+dotnet add package Nimbus
+dotnet add package Nimbus.Transports.Redis
+```
+
+Define a message and handler:
+
+```csharp
+public class SendWelcomeEmailCommand : IBusCommand
+{
+    public string Email { get; set; }
+}
+
+public class SendWelcomeEmailHandler : IHandleCommand<SendWelcomeEmailCommand>
+{
+    public async Task Handle(SendWelcomeEmailCommand command)
+    {
+        // Send the email
+    }
+}
+```
+
+Configure and start the bus:
+
+```csharp
+var bus = new BusBuilder()
+    .Configure()
+    .WithTransport(new RedisTransportConfiguration()
+        .WithConnectionString("localhost"))
+    .WithNames("MyApp", Environment.MachineName)
+    .WithTypesFrom(typeProvider)
+    .WithAutofacDefaults(container)
+    .Build();
+
+await bus.Start();
+```
+
+Send a message:
+
+```csharp
+await bus.Send(new SendWelcomeEmailCommand
+{
+    Email = "user@example.com"
+});
+```
+
+That's it! Check out our [Getting Started guide](/docs/getting-started) for a complete walkthrough.
+
+## Why Choose Nimbus?
+
+**Flexibility**: Start simple with Redis, scale to Azure Service Bus when needed
+
+**Testability**: Use InProcess transport for lightning-fast tests
+
+**Simplicity**: Clean, intuitive API that gets out of your way
+
+**Production-Ready**: Battle-tested in production environments
+
+**Open Source**: MIT licensed and actively maintained
+
+## What's Next?
+
+Explore the documentation to learn more:
+
+- [Installation Guide](/docs/getting-started/installation)
+- [Architecture Overview](/docs/architecture)
+- [Example Application](/docs/examples/cafe-application)
+
+We'd love to hear your feedback! Check out the [GitHub repository](https://github.com/NimbusAPI/Nimbus) to contribute, report issues, or star the project.
+
+Happy messaging! 🚀

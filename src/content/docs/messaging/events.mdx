@@ -1,0 +1,205 @@
+---
+title: "Events"
+description: "Use events in Nimbus to publish notifications to multiple subscribers using pub/sub"
+category: "messaging"
+order: 2
+---
+
+import Callout from '@components/ui/Callout.astro';
+
+## What is an Event?
+
+An event is a message that announces **something that has already happened**. Events are published to a topic and delivered to all interested subscribers. Unlike commands, the publisher has no knowledge of — or dependency on — who is listening.
+
+**Key properties:**
+- **Zero or more handlers**: Any number of subscribers can react to an event
+- **Topic-based delivery**: Events are broadcast via pub/sub topics
+- **Decoupled**: Publishers and subscribers are independent of each other
+- **Past-tense naming**: Named to describe completed facts (`OrderPlaced`, `PaymentReceived`, `UserRegistered`)
+
+<Callout type="info">
+Events are the primary tool for **decoupling services**. Adding a new subscriber to an event requires no changes to the publisher.
+</Callout>
+
+## Event Types
+
+Nimbus supports two event delivery modes:
+
+### Competing Events (`IBusEvent`)
+
+Multiple subscribers compete to handle each event — each event instance is processed by **one handler** across all instances. This is useful for actions like sending a confirmation email where you only want one email sent regardless of how many instances are running.
+
+```csharp
+using Nimbus.MessageContracts;
+
+public class OrderPlacedEvent : IBusEvent
+{
+    public string OrderId { get; set; }
+    public string CustomerId { get; set; }
+    public decimal TotalAmount { get; set; }
+}
+```
+
+### Multicast Events (`IMulticastEvent`)
+
+Every subscriber receives **every event**. Use this when all instances must react — for example, invalidating a local cache on every node.
+
+```csharp
+using Nimbus.MessageContracts;
+
+public class PriceCatalogUpdatedEvent : IMulticastEvent
+{
+    public DateTime UpdatedAt { get; set; }
+}
+```
+
+<Callout type="tip">
+**Rule of thumb**: Use `IBusEvent` (competing) for side-effecting work like sending emails or updating records. Use `IMulticastEvent` for broadcast notifications like cache invalidation or configuration refresh.
+</Callout>
+
+## Publishing an Event
+
+Use `IBus.Publish` to broadcast an event to all subscribers:
+
+```csharp
+await bus.Publish(new OrderPlacedEvent
+{
+    OrderId = order.Id,
+    CustomerId = order.CustomerId,
+    TotalAmount = order.TotalAmount
+});
+```
+
+The publisher doesn't need to know anything about who receives the event. If there are no subscribers, the event is silently discarded.
+
+## Creating Event Handlers
+
+### Competing Event Handler
+
+Implement `IHandleCompetingEvent<TEvent>`:
+
+```csharp
+using Nimbus.Handlers;
+
+// Sends a confirmation email — only one instance should do this per event
+public class SendOrderConfirmationHandler : IHandleCompetingEvent<OrderPlacedEvent>
+{
+    private readonly IEmailService _emailService;
+
+    public SendOrderConfirmationHandler(IEmailService emailService)
+    {
+        _emailService = emailService;
+    }
+
+    public async Task Handle(OrderPlacedEvent @event)
+    {
+        await _emailService.SendOrderConfirmation(
+            @event.CustomerId,
+            @event.OrderId,
+            @event.TotalAmount);
+    }
+}
+```
+
+### Multicast Event Handler
+
+Implement `IHandleMulticastEvent<TEvent>`:
+
+```csharp
+using Nimbus.Handlers;
+
+// Clears local cache on every running instance
+public class ClearPriceCacheHandler : IHandleMulticastEvent<PriceCatalogUpdatedEvent>
+{
+    private readonly IPriceCache _cache;
+
+    public ClearPriceCacheHandler(IPriceCache cache)
+    {
+        _cache = cache;
+    }
+
+    public async Task Handle(PriceCatalogUpdatedEvent @event)
+    {
+        await _cache.Clear();
+    }
+}
+```
+
+## Multiple Handlers for the Same Event
+
+Multiple independent handlers can subscribe to the same event. Nimbus delivers the event to each:
+
+```csharp
+// Handler 1: Send confirmation email
+public class SendOrderConfirmationHandler : IHandleCompetingEvent<OrderPlacedEvent> { ... }
+
+// Handler 2: Reserve inventory
+public class ReserveInventoryHandler : IHandleCompetingEvent<OrderPlacedEvent> { ... }
+
+// Handler 3: Track analytics (multicast — all instances)
+public class TrackOrderAnalyticsHandler : IHandleMulticastEvent<OrderPlacedEvent> { ... }
+```
+
+Each handler receives its own copy of the event and runs independently. A failure in one handler does not affect the others.
+
+## Delivery Guarantees
+
+```
+[Publisher]
+    │
+    ▼
+[Topic / Subscription]
+    ├──▶ [Subscription A] ──▶ [Handler A1] (one of many instances)
+    ├──▶ [Subscription B] ──▶ [Handler B1] (one of many instances)
+    └──▶ [Subscription C] ──▶ [Handler C] (multicast — all instances)
+```
+
+Each subscriber has its own queue backed by the topic subscription. This means a slow or failing subscriber doesn't block other subscribers.
+
+## Idempotency
+
+Event handlers can receive the same event more than once due to retries or transport redelivery. Design handlers to be idempotent:
+
+```csharp
+public async Task Handle(OrderPlacedEvent @event)
+{
+    // Check before acting to avoid double-sending
+    if (await _emailLog.AlreadySent(@event.OrderId))
+        return;
+
+    await _emailService.SendOrderConfirmation(@event.OrderId);
+    await _emailLog.Record(@event.OrderId);
+}
+```
+
+<Callout type="warning">
+Idempotency is especially important for competing events, where the same event may be retried on a different handler instance after a failure.
+</Callout>
+
+## Handler Registration
+
+Register handlers with your DI container. With Autofac:
+
+```csharp
+builder.RegisterAssemblyTypes(typeof(SendOrderConfirmationHandler).Assembly)
+       .AsImplementedInterfaces();
+```
+
+Nimbus discovers all `IHandleCompetingEvent<T>` and `IHandleMulticastEvent<T>` implementations automatically via the configured type provider.
+
+## When to Use Events
+
+Events are the right choice when:
+
+- Something **has happened** that other parts of the system should know about
+- You want to **decouple** the publisher from its subscribers
+- **Multiple services** need to react to the same occurrence
+- Adding new reactions to an event **should not require changing the publisher**
+
+If you need to trigger a specific action in a specific service, use a [Command](/docs/messaging/commands) instead.
+
+## Next Steps
+
+- [Commands](/docs/messaging/commands) — direct a specific action to a single handler
+- [Requests](/docs/messaging/requests) — get a response back from a handler
+- [Multicast Requests](/docs/messaging/multicast-requests) — query multiple handlers for responses

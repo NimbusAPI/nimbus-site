@@ -1,0 +1,243 @@
+---
+title: "First Message"
+description: "Send and handle your first message with Nimbus in 5 minutes"
+category: "getting-started"
+order: 3
+---
+
+import Callout from '@components/ui/Callout.astro';
+
+## Overview
+
+In this guide, you'll:
+
+1. Define a message contract
+2. Create a handler
+3. Configure the Nimbus bus
+4. Send a message
+5. See it processed
+
+<Callout type="info">
+This example uses the Redis transport and Autofac for dependency injection. Make sure you have Redis running locally (`docker run -d -p 6379:6379 redis`) or adjust the connection string.
+</Callout>
+
+## Step 1: Define a Message Contract
+
+Create a command message that inherits from `IBusCommand`:
+
+```csharp
+using Nimbus.MessageContracts;
+
+public class SendWelcomeEmailCommand : IBusCommand
+{
+    public string UserEmail { get; set; }
+    public string UserName { get; set; }
+}
+```
+
+## Step 2: Create a Handler
+
+Create a handler that implements `IHandleCommand<T>`:
+
+```csharp
+using Nimbus.Handlers;
+using System.Threading.Tasks;
+
+public class SendWelcomeEmailHandler : IHandleCommand<SendWelcomeEmailCommand>
+{
+    public async Task Handle(SendWelcomeEmailCommand command)
+    {
+        // Simulate sending an email
+        Console.WriteLine($"Sending welcome email to {command.UserEmail}");
+        Console.WriteLine($"Hello {command.UserName}, welcome to our service!");
+
+        await Task.CompletedTask;
+    }
+}
+```
+
+<Callout type="tip">
+Handlers are resolved from your DI container, so you can inject dependencies like `ILogger`, `IEmailService`, etc.
+</Callout>
+
+## Step 3: Configure Nimbus
+
+Set up the bus with your chosen transport and DI container:
+
+```csharp
+using Autofac;
+using Nimbus;
+using Nimbus.Configuration;
+using Nimbus.Containers.Autofac;
+using Nimbus.Transports.Redis;
+
+public class Program
+{
+    public static async Task Main(string[] args)
+    {
+        // 1. Set up Autofac container
+        var builder = new ContainerBuilder();
+
+        // Register your handlers
+        builder.RegisterType<SendWelcomeEmailHandler>()
+               .AsImplementedInterfaces();
+
+        var container = builder.Build();
+
+        // 2. Create type provider for scanning message types and handlers
+        var typeProvider = new AssemblyScanningTypeProvider(
+            typeof(SendWelcomeEmailCommand).Assembly,
+            typeof(SendWelcomeEmailHandler).Assembly
+        );
+
+        // 3. Configure the bus
+        var bus = new BusBuilder()
+            .Configure()
+            .WithTransport(new RedisTransportConfiguration()
+                .WithConnectionString("localhost:6379"))
+            .WithNames("MyApp", Environment.MachineName)
+            .WithTypesFrom(typeProvider)
+            .WithAutofacDefaults(container.BeginLifetimeScope())
+            .Build();
+
+        // 4. Start the bus
+        await bus.Start();
+
+        // Now you're ready to send messages!
+        await SendMessage(bus);
+
+        // Keep the application running
+        Console.WriteLine("Press any key to exit...");
+        Console.ReadKey();
+
+        // 5. Stop the bus when done
+        await bus.Stop();
+    }
+}
+```
+
+## Step 4: Send Your First Message
+
+```csharp
+public static async Task SendMessage(IBus bus)
+{
+    var command = new SendWelcomeEmailCommand
+    {
+        UserEmail = "user@example.com",
+        UserName = "John Doe"
+    };
+
+    await bus.Send(command);
+
+    Console.WriteLine("Message sent! Check the handler output above.");
+}
+```
+
+## Step 5: Run and Verify
+
+Run your application. You should see output like:
+
+```
+Message sent! Check the handler output above.
+Sending welcome email to user@example.com
+Hello John Doe, welcome to our service!
+```
+
+## Complete Example
+
+Here's the full program in one file:
+
+```csharp
+using Autofac;
+using Nimbus;
+using Nimbus.Configuration;
+using Nimbus.Containers.Autofac;
+using Nimbus.Handlers;
+using Nimbus.MessageContracts;
+using Nimbus.Transports.Redis;
+using System;
+using System.Threading.Tasks;
+
+// Message definition
+public class SendWelcomeEmailCommand : IBusCommand
+{
+    public string UserEmail { get; set; }
+    public string UserName { get; set; }
+}
+
+// Handler implementation
+public class SendWelcomeEmailHandler : IHandleCommand<SendWelcomeEmailCommand>
+{
+    public async Task Handle(SendWelcomeEmailCommand command)
+    {
+        Console.WriteLine($"Sending welcome email to {command.UserEmail}");
+        Console.WriteLine($"Hello {command.UserName}, welcome to our service!");
+        await Task.CompletedTask;
+    }
+}
+
+// Application entry point
+public class Program
+{
+    public static async Task Main(string[] args)
+    {
+        var builder = new ContainerBuilder();
+        builder.RegisterType<SendWelcomeEmailHandler>().AsImplementedInterfaces();
+        var container = builder.Build();
+
+        var typeProvider = new AssemblyScanningTypeProvider(
+            typeof(SendWelcomeEmailCommand).Assembly,
+            typeof(SendWelcomeEmailHandler).Assembly
+        );
+
+        var bus = new BusBuilder()
+            .Configure()
+            .WithTransport(new RedisTransportConfiguration()
+                .WithConnectionString("localhost:6379"))
+            .WithNames("MyApp", Environment.MachineName)
+            .WithTypesFrom(typeProvider)
+            .WithAutofacDefaults(container.BeginLifetimeScope())
+            .Build();
+
+        await bus.Start();
+
+        // Send the message
+        await bus.Send(new SendWelcomeEmailCommand
+        {
+            UserEmail = "user@example.com",
+            UserName = "John Doe"
+        });
+
+        Console.WriteLine("Press any key to exit...");
+        Console.ReadKey();
+
+        await bus.Stop();
+    }
+}
+```
+
+<Callout type="warning">
+Don't forget to start Redis before running this example! Use `docker run -d -p 6379:6379 redis` or install Redis locally.
+</Callout>
+
+## What's Next?
+
+Now that you've sent your first message, explore:
+
+- **[Configuration](/docs/getting-started/configuration)** - Learn about advanced configuration options
+- **[Message Patterns](/docs/architecture/message-patterns)** - Understand commands, events, and requests
+- **[Transports](/docs/transports)** - Explore different transport options
+
+## Troubleshooting
+
+### Message not being processed?
+
+1. **Check Redis is running**: `docker ps` or `redis-cli ping`
+2. **Verify handler is registered**: Make sure your handler is registered in the DI container
+3. **Check type provider**: Ensure the type provider scans the assembly containing your handler
+
+### Bus won't start?
+
+- Verify your Redis connection string is correct
+- Check for port conflicts (default is 6379)
+- Look for exception messages in the console output

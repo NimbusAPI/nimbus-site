@@ -1,0 +1,256 @@
+---
+title: "Multicast Requests"
+description: "Use multicast requests in Nimbus to query multiple handlers and gather all responses"
+category: "messaging"
+order: 4
+---
+
+import Callout from '@components/ui/Callout.astro';
+
+## What is a Multicast Request?
+
+A multicast request is a message that is sent to **all registered handlers** and collects a response from each. It implements the scatter-gather pattern — you broadcast a question, and collect answers from whoever responds within a timeout window.
+
+**Key properties:**
+- **Multiple handlers**: Every registered handler for the request type receives it
+- **Responses collected**: All responses are gathered and returned to the caller
+- **Timeout-based**: The caller waits for responses up to a specified timeout
+- **Partial results**: Handlers that don't respond in time are simply omitted
+
+<Callout type="info">
+Multicast requests are ideal for **distributed queries** — finding available resources, collecting quotes, or checking the health of multiple services simultaneously.
+</Callout>
+
+## Defining a Multicast Request
+
+Implement `IBusMulticastRequest<TRequest, TResponse>`:
+
+```csharp
+using Nimbus.MessageContracts;
+
+// The request
+public class FindAvailableDriversRequest
+    : IBusMulticastRequest<FindAvailableDriversRequest, DriverDto>
+{
+    public string PickupLocation { get; set; }
+    public DateTime RequestedTime { get; set; }
+}
+
+// Each handler returns one of these (or null to opt out)
+public class DriverDto
+{
+    public string DriverId { get; set; }
+    public string Name { get; set; }
+    public string CurrentLocation { get; set; }
+    public int EstimatedArrivalMinutes { get; set; }
+}
+```
+
+## Creating Handlers
+
+Implement `IHandleMulticastRequest<TRequest, TResponse>`. Each service or region can have its own handler:
+
+```csharp
+using Nimbus.Handlers;
+
+// North region — responds if it has an available driver
+public class NorthRegionDriverHandler
+    : IHandleMulticastRequest<FindAvailableDriversRequest, DriverDto>
+{
+    private readonly IDriverService _driverService;
+
+    public NorthRegionDriverHandler(IDriverService driverService)
+    {
+        _driverService = driverService;
+    }
+
+    public async Task<DriverDto> Handle(FindAvailableDriversRequest request)
+    {
+        var driver = await _driverService.FindNearest(request.PickupLocation, region: "North");
+
+        if (driver == null)
+            return null; // No driver available — Nimbus omits null responses
+
+        return new DriverDto
+        {
+            DriverId = driver.Id,
+            Name = driver.Name,
+            CurrentLocation = driver.Location,
+            EstimatedArrivalMinutes = driver.CalculateETA(request.PickupLocation)
+        };
+    }
+}
+
+// South region — independent handler, same request type
+public class SouthRegionDriverHandler
+    : IHandleMulticastRequest<FindAvailableDriversRequest, DriverDto>
+{
+    public async Task<DriverDto> Handle(FindAvailableDriversRequest request)
+    {
+        // Similar logic for the south region
+    }
+}
+```
+
+Returning `null` signals that this handler has no relevant response. Null responses are excluded from the results the caller receives.
+
+## Sending a Multicast Request
+
+Use `IBus.MulticastRequest` to broadcast the request and collect responses:
+
+```csharp
+var timeout = TimeSpan.FromSeconds(5);
+
+var responseTasks = bus.MulticastRequest<FindAvailableDriversRequest, DriverDto>(
+    new FindAvailableDriversRequest
+    {
+        PickupLocation = "123 Main St",
+        RequestedTime = DateTime.UtcNow
+    },
+    timeout
+);
+
+// Iterate as responses arrive
+var drivers = new List<DriverDto>();
+foreach (var task in responseTasks)
+{
+    try
+    {
+        var driver = await task;
+        if (driver != null)
+            drivers.Add(driver);
+    }
+    catch (TimeoutException)
+    {
+        // This handler didn't respond in time — continue collecting others
+    }
+}
+
+var bestDriver = drivers
+    .OrderBy(d => d.EstimatedArrivalMinutes)
+    .FirstOrDefault();
+```
+
+`MulticastRequest` returns an enumerable of tasks. You can process responses as they arrive rather than waiting for all of them.
+
+## Collecting All Responses at Once
+
+If you prefer to wait for all responses before proceeding:
+
+```csharp
+var timeout = TimeSpan.FromSeconds(5);
+
+var responseTasks = bus.MulticastRequest<GetInventoryLevelRequest, InventoryDto>(request, timeout);
+
+// Wait for all, ignoring timeouts
+var results = await Task.WhenAll(responseTasks.Select(async t =>
+{
+    try { return await t; }
+    catch (TimeoutException) { return null; }
+}));
+
+var inventoryLevels = results.Where(r => r != null).ToList();
+```
+
+## How It Works
+
+```
+[Sender]
+    │── broadcasts FindAvailableDriversRequest ──▶ [Topic]
+    │                                                  │
+    │                              ┌───────────────────┤
+    │                              │                   │
+    │                     [North Handler]      [South Handler]
+    │                              │                   │
+    │◀── DriverDto (north) ────────┘                   │
+    │◀── DriverDto (south) ────────────────────────────┘
+    │    (via reply queues, within timeout)
+```
+
+Each handler gets its own reply queue. The caller collects responses as they arrive and stops waiting after the timeout.
+
+## Timeout Considerations
+
+Choose your timeout based on the expected handler response time:
+
+```csharp
+// Fast query — handlers should respond quickly
+var quickResults = bus.MulticastRequest<CheckServiceHealthRequest, HealthDto>(
+    request, timeout: TimeSpan.FromSeconds(2));
+
+// Slower query — allow more time for computation
+var slowResults = bus.MulticastRequest<GetPriceQuoteRequest, QuoteDto>(
+    request, timeout: TimeSpan.FromSeconds(10));
+```
+
+<Callout type="tip">
+Set timeouts conservatively. A timeout that's too short will silently drop valid responses from slower handlers. A timeout that's too long will make the caller wait unnecessarily when handlers are unavailable.
+</Callout>
+
+## Common Use Cases
+
+### Finding Available Resources
+
+```csharp
+public class FindAvailableSlotRequest
+    : IBusMulticastRequest<FindAvailableSlotRequest, AppointmentSlotDto>
+{
+    public DateTime PreferredDate { get; set; }
+    public string ServiceType { get; set; }
+}
+```
+
+Each clinic or provider service responds with their next available slot.
+
+### Collecting Bids or Quotes
+
+```csharp
+public class RequestShippingQuoteRequest
+    : IBusMulticastRequest<RequestShippingQuoteRequest, ShippingQuoteDto>
+{
+    public string FromZip { get; set; }
+    public string ToZip { get; set; }
+    public decimal WeightKg { get; set; }
+}
+```
+
+Each shipping provider responds with their rate. The caller picks the cheapest.
+
+### Distributed Health Checks
+
+```csharp
+public class ServiceHealthRequest
+    : IBusMulticastRequest<ServiceHealthRequest, ServiceHealthDto>
+{
+    public string CheckId { get; set; }
+}
+
+// Every service that participates responds with its health status
+```
+
+## Comparison with Regular Requests
+
+| | Request | Multicast Request |
+|--|---------|-------------------|
+| Handlers | Exactly one | All registered |
+| Response | Single value | Collection of values |
+| Use case | Query a specific service | Query all services |
+| Timeout | Optional | Required |
+| Missing handler | Error | Empty result set |
+
+## When to Use Multicast Requests
+
+Multicast requests are the right choice when:
+
+- You need to **query multiple services** simultaneously
+- You want to **collect and compare** responses (best price, nearest driver, fastest slot)
+- You're building **scatter-gather** workflows
+- You want to check the status of **all running instances**
+
+For querying a single service, use a [Request](/docs/messaging/requests) instead.
+
+## Next Steps
+
+- [Requests](/docs/messaging/requests) — request/response with a single handler
+- [Commands](/docs/messaging/commands) — trigger actions across competing consumers
+- [Events](/docs/messaging/events) — broadcast notifications without waiting for responses

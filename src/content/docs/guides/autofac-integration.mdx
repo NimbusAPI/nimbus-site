@@ -1,0 +1,242 @@
+---
+title: "Autofac Integration"
+description: "Set up Nimbus with Autofac for dependency injection in .NET applications"
+category: "guides"
+order: 1
+---
+
+import Callout from '@components/ui/Callout.astro';
+
+## Overview
+
+Nimbus has first-class Autofac support via the `Nimbus.Containers.Autofac` package. It provides two key extension methods:
+
+- `builder.RegisterNimbus(typeProvider)` — registers Nimbus components (type provider, dependency resolver, all handler types) in the Autofac container
+- `configuration.WithAutofacDefaults(componentContext)` — connects the built container to the bus configuration
+
+## Installation
+
+```bash
+dotnet add package Nimbus.Containers.Autofac
+```
+
+## Basic Setup
+
+The typical setup registers everything in the Autofac container, then hands the container to the bus:
+
+```csharp
+using Autofac;
+using Nimbus;
+using Nimbus.Configuration;
+using Nimbus.Infrastructure;
+using Nimbus.Transports.Redis;
+
+// 1. Scan assemblies for message types and handlers
+var typeProvider = new AssemblyScanningTypeProvider(
+    typeof(PlaceOrderCommand).Assembly,
+    typeof(PlaceOrderHandler).Assembly
+);
+
+// 2. Build the Autofac container
+var builder = new ContainerBuilder();
+
+// Register Nimbus — wires up type provider, DI resolver, and all handler types
+builder.RegisterNimbus(typeProvider);
+
+// Register your own services
+builder.RegisterType<OrderRepository>()
+    .As<IOrderRepository>()
+    .InstancePerLifetimeScope();
+
+builder.RegisterType<EmailService>()
+    .As<IEmailService>()
+    .InstancePerLifetimeScope();
+
+var container = builder.Build();
+
+// 3. Configure and build the bus
+var bus = new BusBuilder()
+    .Configure()
+    .WithTransport(new RedisTransportConfiguration()
+        .WithConnectionString("localhost:6379"))
+    .WithNames("OrderService", Environment.MachineName)
+    .WithAutofacDefaults(container)  // connects Autofac to the bus
+    .Build();
+
+await bus.Start();
+```
+
+## What RegisterNimbus Does
+
+`builder.RegisterNimbus(typeProvider)` performs three registrations:
+
+1. **Registers the `ITypeProvider`** as a singleton — Nimbus uses this to discover message types and handler types
+2. **Registers `AutofacDependencyResolver`** as `IDependencyResolver` — adapts Autofac to Nimbus's DI abstraction
+3. **Registers all resolvable types** from the type provider (your handler types) as `InstancePerLifetimeScope`
+
+This means you don't need to register your handlers manually — `RegisterNimbus` discovers and registers them automatically from the assemblies you pass to `AssemblyScanningTypeProvider`.
+
+## What WithAutofacDefaults Does
+
+`configuration.WithAutofacDefaults(container)` resolves `ITypeProvider` and `IDependencyResolver` from the container and passes them to the bus configuration. It's equivalent to:
+
+```csharp
+configuration
+    .WithTypesFrom(container.Resolve<ITypeProvider>())
+    .WithDependencyResolver(container.Resolve<IDependencyResolver>());
+```
+
+## Handler Lifetime
+
+Handlers registered by `RegisterNimbus` are `InstancePerLifetimeScope`. Nimbus creates a child lifetime scope for each message, so each message gets its own handler instance and a fresh set of scoped dependencies:
+
+```
+Container (root scope)
+  │
+  ├── Message 1 arrives → child scope created
+  │     ├── PlaceOrderHandler (new instance)
+  │     ├── IOrderRepository (new instance, scoped)
+  │     └── Disposed after handler completes
+  │
+  └── Message 2 arrives → child scope created
+        ├── PlaceOrderHandler (new instance)
+        ├── IOrderRepository (new instance, scoped)
+        └── Disposed after handler completes
+```
+
+## Registering Interceptors
+
+Register interceptors in the container before building it. Nimbus resolves them per-message from the child scope:
+
+```csharp
+builder.RegisterType<LoggingInterceptor>()
+    .AsSelf()
+    .InstancePerLifetimeScope();
+
+builder.RegisterType<MetricsInterceptor>()
+    .AsSelf()
+    .InstancePerLifetimeScope();
+
+var container = builder.Build();
+
+var bus = new BusBuilder()
+    .Configure()
+    // ...
+    .WithAutofacDefaults(container)
+    .WithGlobalInboundInterceptorTypes(typeof(LoggingInterceptor))
+    .WithGlobalOutboundInterceptorTypes(typeof(MetricsInterceptor))
+    .Build();
+```
+
+## Multiple Assemblies
+
+Pass all assemblies that contain message types or handlers to `AssemblyScanningTypeProvider`:
+
+```csharp
+var typeProvider = new AssemblyScanningTypeProvider(
+    typeof(PlaceOrderCommand).Assembly,     // Message contracts assembly
+    typeof(PlaceOrderHandler).Assembly,     // Handlers assembly
+    typeof(GetOrderRequest).Assembly,       // More contracts
+    typeof(OrderPlacedEvent).Assembly       // Events
+);
+```
+
+<Callout type="tip">
+If your messages and handlers are in the same assembly, you only need to reference it once. `AssemblyScanningTypeProvider` deduplicates assemblies automatically.
+</Callout>
+
+## ASP.NET Core Integration
+
+In an ASP.NET Core application, Autofac can be used as the service provider. Configure Nimbus in the `ConfigureContainer` method:
+
+```csharp
+public class Startup
+{
+    public void ConfigureServices(IServiceCollection services)
+    {
+        services.AddControllers();
+        // other service registrations
+    }
+
+    public void ConfigureContainer(ContainerBuilder builder)
+    {
+        var typeProvider = new AssemblyScanningTypeProvider(
+            typeof(PlaceOrderHandler).Assembly
+        );
+
+        builder.RegisterNimbus(typeProvider);
+
+        builder.RegisterType<OrderRepository>()
+            .As<IOrderRepository>()
+            .InstancePerLifetimeScope();
+
+        // Register bus as singleton
+        builder.Register(context =>
+        {
+            var bus = new BusBuilder()
+                .Configure()
+                .WithTransport(new RedisTransportConfiguration()
+                    .WithConnectionString("localhost:6379"))
+                .WithNames("OrderService", Environment.MachineName)
+                .WithAutofacDefaults(context.Resolve<IComponentContext>())
+                .Build();
+
+            bus.Start().GetAwaiter().GetResult();
+            return bus;
+        })
+        .As<IBus>()
+        .SingleInstance();
+    }
+}
+```
+
+## Disposal
+
+Always stop and dispose the bus before the application exits:
+
+```csharp
+// Console application
+await bus.Stop();
+bus.Dispose();
+container.Dispose();
+
+// ASP.NET Core — Autofac handles disposal automatically
+// Just register the bus and it will be disposed when the container is disposed
+```
+
+## Common Patterns
+
+### Registering Services Shared Across Handlers
+
+Register services that all handlers use as singletons (if thread-safe) or scoped:
+
+```csharp
+// Thread-safe — register as singleton
+builder.RegisterType<HttpClientFactory>()
+    .As<IHttpClientFactory>()
+    .SingleInstance();
+
+// Not thread-safe — register as scoped
+builder.RegisterType<OrderDbContext>()
+    .AsSelf()
+    .InstancePerLifetimeScope();
+```
+
+### Decorating Handlers
+
+Autofac's decorator support works with Nimbus handlers:
+
+```csharp
+builder.RegisterType<PlaceOrderHandler>()
+    .Named<IHandleCommand<PlaceOrderCommand>>("inner");
+
+builder.RegisterDecorator<IHandleCommand<PlaceOrderCommand>>(
+    (context, inner) => new RetryingPlaceOrderHandler(inner),
+    "inner");
+```
+
+## Next Steps
+
+- [Dependency Injection architecture](/docs/architecture/dependency-injection) — how Nimbus manages handler lifetimes
+- [Interceptors](/docs/advanced/interceptors) — cross-cutting concerns via interceptors
+- [Testing](/docs/guides/testing) — testing with Autofac and the InProcess transport

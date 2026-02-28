@@ -1,0 +1,607 @@
+---
+title: "Routing"
+description: "How Nimbus routes messages to queues and topics, and how to customize routing behavior"
+category: "architecture"
+order: 4
+---
+
+import Callout from '@components/ui/Callout.astro';
+
+## Overview
+
+Routing determines how message types map to physical queue and topic paths in your messaging infrastructure. Nimbus provides sensible defaults but allows complete customization when needed.
+
+## The IRouter Interface
+
+The routing abstraction is simple:
+
+```csharp
+public interface IRouter
+{
+    string Route(Type messageType, QueueOrTopic queueOrTopic, string applicationName);
+}
+```
+
+This method takes a message type and returns the queue or topic path where messages of that type should be sent.
+
+## Default Router
+
+Nimbus uses the `DestinationPerMessageTypeRouter` by default, which creates one destination per message type.
+
+### Naming Convention
+
+The default router generates paths using this pattern:
+
+```
+{applicationName}.{messageTypeName}
+```
+
+### Examples
+
+```csharp
+// Configuration
+var bus = new BusBuilder()
+    .Configure()
+    .WithNames("OrderService", Environment.MachineName)
+    .Build();
+
+// Message types and their routes
+PlaceOrderCommand       → "OrderService.PlaceOrderCommand"
+OrderPlacedEvent        → "OrderService.OrderPlacedEvent"
+GetOrderRequest         → "OrderService.GetOrderRequest"
+```
+
+<Callout type="info">
+**Why Application Name?** The application name prevents message collisions when multiple applications share the same messaging infrastructure.
+</Callout>
+
+## Routing Behavior by Message Pattern
+
+Different message patterns use queues and topics differently:
+
+### Commands → Queues
+
+Commands are routed to queues for point-to-point delivery:
+
+```csharp
+public class PlaceOrderCommand : IBusCommand
+{
+    public string OrderId { get; set; }
+}
+
+// Routes to: Queue "OrderService.PlaceOrderCommand"
+await bus.Send(new PlaceOrderCommand { OrderId = "123" });
+```
+
+Multiple instances can consume from the same queue (competing consumers pattern).
+
+### Events → Topics
+
+Events are routed to topics for pub/sub delivery:
+
+```csharp
+public class OrderPlacedEvent : IBusEvent
+{
+    public string OrderId { get; set; }
+}
+
+// Routes to: Topic "OrderService.OrderPlacedEvent"
+await bus.Publish(new OrderPlacedEvent { OrderId = "123" });
+```
+
+Each subscriber gets its own subscription on the topic:
+- `OrderService.OrderPlacedEvent/EmailService`
+- `OrderService.OrderPlacedEvent/InventoryService`
+- `OrderService.OrderPlacedEvent/AnalyticsService`
+
+### Requests → Queues with Reply-To
+
+Requests use queues with a reply-to mechanism:
+
+```csharp
+public class GetOrderRequest : IBusRequest<GetOrderRequest, OrderDto>
+{
+    public string OrderId { get; set; }
+}
+
+// Request routes to: "OrderService.GetOrderRequest"
+// Response routes to: "{instanceName}.{MessageType}Response"
+var response = await bus.Request<GetOrderRequest, OrderDto>(
+    new GetOrderRequest { OrderId = "123" }
+);
+```
+
+## Custom Routing Strategies
+
+You can implement custom routing logic for specific requirements:
+
+### 1. Routing by Message Property
+
+Route messages based on their content:
+
+```csharp
+public class RegionBasedRouter : IRouter
+{
+    public string Route(Type messageType, QueueOrTopic queueOrTopic, string applicationName)
+    {
+        var basePath = $"{applicationName}.{messageType.Name}";
+
+        // For commands with a Region property, add region suffix
+        if (typeof(IRegionalCommand).IsAssignableFrom(messageType))
+        {
+            // This is determined at runtime in the actual send operation
+            return $"{basePath}.{{Region}}"; // Placeholder
+        }
+
+        return basePath;
+    }
+}
+
+public interface IRegionalCommand
+{
+    string Region { get; set; }
+}
+
+public class PlaceOrderCommand : IBusCommand, IRegionalCommand
+{
+    public string OrderId { get; set; }
+    public string Region { get; set; } // "US", "EU", "APAC"
+}
+
+// Results in:
+// PlaceOrderCommand { Region = "US" } → "OrderService.PlaceOrderCommand.US"
+// PlaceOrderCommand { Region = "EU" } → "OrderService.PlaceOrderCommand.EU"
+```
+
+### 2. Routing by Message Version
+
+Support multiple versions of the same message:
+
+```csharp
+public class VersionedRouter : IRouter
+{
+    public string Route(Type messageType, QueueOrTopic queueOrTopic, string applicationName)
+    {
+        var versionAttr = messageType.GetCustomAttribute<MessageVersionAttribute>();
+        var version = versionAttr?.Version ?? "v1";
+
+        return $"{applicationName}.{version}.{messageType.Name}";
+    }
+}
+
+[MessageVersion("v2")]
+public class PlaceOrderCommandV2 : IBusCommand
+{
+    public string OrderId { get; set; }
+    public List<OrderItem> Items { get; set; }
+}
+
+// Routes to: "OrderService.v2.PlaceOrderCommandV2"
+```
+
+### 3. Shared Queues
+
+Route multiple message types to the same queue:
+
+```csharp
+public class SharedQueueRouter : IRouter
+{
+    private readonly Dictionary<Type, string> _routingTable = new()
+    {
+        { typeof(CreateUserCommand), "UserCommands" },
+        { typeof(UpdateUserCommand), "UserCommands" },
+        { typeof(DeleteUserCommand), "UserCommands" },
+        { typeof(CreateProductCommand), "ProductCommands" },
+        { typeof(UpdateProductCommand), "ProductCommands" },
+    };
+
+    public string Route(Type messageType, QueueOrTopic queueOrTopic, string applicationName)
+    {
+        if (_routingTable.TryGetValue(messageType, out var queueName))
+        {
+            return $"{applicationName}.{queueName}";
+        }
+
+        // Fallback to default routing
+        return $"{applicationName}.{messageType.Name}";
+    }
+}
+
+// Results in:
+// CreateUserCommand   → "OrderService.UserCommands"
+// UpdateUserCommand   → "OrderService.UserCommands"
+// DeleteUserCommand   → "OrderService.UserCommands"
+// CreateProductCommand → "OrderService.ProductCommands"
+```
+
+<Callout type="warning">
+**Shared Queue Considerations**: When routing multiple message types to the same queue, ensure your handlers can process them all efficiently. One slow message type can block others.
+</Callout>
+
+### 4. Environment-Specific Routing
+
+Include environment in routing for isolated testing:
+
+```csharp
+public class EnvironmentRouter : IRouter
+{
+    private readonly string _environment;
+
+    public EnvironmentRouter(string environment)
+    {
+        _environment = environment; // "dev", "staging", "prod"
+    }
+
+    public string Route(Type messageType, QueueOrTopic queueOrTopic, string applicationName)
+    {
+        return $"{_environment}.{applicationName}.{messageType.Name}";
+    }
+}
+
+// In development: "dev.OrderService.PlaceOrderCommand"
+// In staging: "staging.OrderService.PlaceOrderCommand"
+// In production: "prod.OrderService.PlaceOrderCommand"
+```
+
+## Configuring Custom Routers
+
+Apply your custom router during bus configuration:
+
+```csharp
+var bus = new BusBuilder()
+    .Configure()
+    .WithTransport(transport)
+    .WithNames("OrderService", Environment.MachineName)
+    .WithRouter(new CustomRouter())
+    .Build();
+```
+
+## Path Naming Best Practices
+
+### 1. Use Clear, Descriptive Names
+
+```csharp
+// ✅ GOOD: Clear message intent
+public class PlaceOrderCommand : IBusCommand { }
+public class OrderPlacedEvent : IBusEvent { }
+
+// ❌ BAD: Unclear abbreviations
+public class POCmd : IBusCommand { }
+public class OPE : IBusEvent { }
+```
+
+### 2. Follow Naming Conventions
+
+```csharp
+// Commands: Imperative verb + noun
+PlaceOrderCommand
+SendEmailCommand
+ProcessPaymentCommand
+
+// Events: Past tense verb + noun
+OrderPlacedEvent
+EmailSentEvent
+PaymentProcessedEvent
+
+// Requests: Get/Find/Check + noun + Request
+GetOrderRequest
+FindUserRequest
+CheckInventoryRequest
+```
+
+### 3. Keep Paths Reasonably Short
+
+```csharp
+// ✅ GOOD: Concise but clear
+"OrderService.PlaceOrder"
+
+// ⚠️ ACCEPTABLE: More specific
+"OrderService.Orders.Commands.PlaceOrder"
+
+// ❌ TOO LONG: Overly nested
+"CompanyName.DivisionName.OrderService.Domain.Orders.Commands.PlaceNewOrderCommand.V1"
+```
+
+### 4. Avoid Special Characters
+
+Most messaging systems have restrictions on queue/topic names:
+
+```csharp
+// ✅ GOOD: Alphanumeric, dots, hyphens, underscores
+"OrderService.PlaceOrder"
+"OrderService.PlaceOrder-v2"
+"OrderService.PlaceOrder_US"
+
+// ❌ BAD: Special characters
+"OrderService/PlaceOrder"  // Slashes may cause issues
+"OrderService:PlaceOrder"  // Colons may cause issues
+"OrderService.PlaceOrder!" // Symbols may cause issues
+```
+
+## Routing and Scalability
+
+### Horizontal Scaling
+
+With default routing, you can scale by adding instances:
+
+```
+┌─────────────────────────────────┐
+│ OrderService.PlaceOrderCommand  │ Queue
+└────────┬────────────────────────┘
+         │
+    ┌────┴────┬──────────┬─────────┐
+    │         │          │         │
+┌───▼────┐ ┌──▼─────┐ ┌──▼─────┐ ┌──▼─────┐
+│Instance│ │Instance│ │Instance│ │Instance│
+│   1    │ │   2    │ │   3    │ │   4    │
+└────────┘ └────────┘ └────────┘ └────────┘
+
+All instances compete for messages from the same queue
+```
+
+### Partitioning
+
+Use custom routing to partition messages:
+
+```csharp
+public class PartitionedRouter : IRouter
+{
+    public string Route(Type messageType, QueueOrTopic queueOrTopic, string applicationName)
+    {
+        var partitionCount = 4;
+        var basePath = $"{applicationName}.{messageType.Name}";
+
+        // Messages are partitioned at send time based on partition key
+        return $"{basePath}.Partition{{0..{partitionCount-1}}}";
+    }
+}
+```
+
+```
+┌──────────────────────┐  ┌──────────────────────┐
+│ Queue.Partition0     │  │ Queue.Partition1     │
+└─────────┬────────────┘  └──────────┬───────────┘
+          │                          │
+     ┌────▼────┐                ┌────▼────┐
+     │Instance │                │Instance │
+     │  0-1    │                │  1-1    │
+     └─────────┘                └─────────┘
+
+┌──────────────────────┐  ┌──────────────────────┐
+│ Queue.Partition2     │  │ Queue.Partition3     │
+└─────────┬────────────┘  └──────────┬───────────┘
+          │                          │
+     ┌────▼────┐                ┌────▼────┐
+     │Instance │                │Instance │
+     │  2-1    │                │  3-1    │
+     └─────────┘                └─────────┘
+```
+
+<Callout type="tip">
+**Partitioning Benefits**: Improves throughput and allows for ordered processing within each partition. Messages with the same partition key go to the same queue.
+</Callout>
+
+## Topic Subscription Naming
+
+For events, Nimbus creates subscriptions based on the subscriber's application name:
+
+```csharp
+// Publisher
+var bus = new BusBuilder()
+    .Configure()
+    .WithNames("OrderService", Environment.MachineName)
+    .Build();
+
+await bus.Publish(new OrderPlacedEvent { OrderId = "123" });
+
+// Subscriber 1
+var emailBus = new BusBuilder()
+    .Configure()
+    .WithNames("EmailService", Environment.MachineName)
+    .Build();
+// Creates subscription: "OrderService.OrderPlacedEvent/EmailService"
+
+// Subscriber 2
+var inventoryBus = new BusBuilder()
+    .Configure()
+    .WithNames("InventoryService", Environment.MachineName)
+    .Build();
+// Creates subscription: "OrderService.OrderPlacedEvent/InventoryService"
+```
+
+### Subscription Filtering
+
+Some transports support subscription filters:
+
+```csharp
+public class FilteredEventRouter : IRouter
+{
+    public string Route(Type messageType, QueueOrTopic queueOrTopic, string applicationName)
+    {
+        var basePath = $"{applicationName}.{messageType.Name}";
+
+        // Add filter metadata
+        if (messageType.GetCustomAttribute<FilterableAttribute>() != null)
+        {
+            return $"{basePath}[Filterable]";
+        }
+
+        return basePath;
+    }
+}
+
+[Filterable]
+public class OrderPlacedEvent : IBusEvent
+{
+    public string OrderId { get; set; }
+    public string Region { get; set; }
+    public decimal TotalAmount { get; set; }
+}
+
+// Subscription can filter: "Region = 'US' AND TotalAmount > 1000"
+```
+
+## Routing Diagnostics
+
+### Viewing Current Routes
+
+Create a diagnostic endpoint to see how messages are routed:
+
+```csharp
+public class RoutingDiagnostics
+{
+    private readonly IRouter _router;
+    private readonly ITypeProvider _typeProvider;
+
+    public Dictionary<string, string> GetAllRoutes()
+    {
+        var routes = new Dictionary<string, string>();
+
+        foreach (var messageType in _typeProvider.AllMessageTypes())
+        {
+            var queueOrTopic = DetermineQueueOrTopic(messageType);
+            var route = _router.Route(messageType, queueOrTopic, "MyApp");
+            routes[messageType.Name] = route;
+        }
+
+        return routes;
+    }
+}
+
+// Output:
+// PlaceOrderCommand → MyApp.PlaceOrderCommand (Queue)
+// OrderPlacedEvent → MyApp.OrderPlacedEvent (Topic)
+// GetOrderRequest → MyApp.GetOrderRequest (Queue)
+```
+
+### Logging Route Decisions
+
+Add logging to understand routing behavior:
+
+```csharp
+public class LoggingRouter : IRouter
+{
+    private readonly IRouter _innerRouter;
+    private readonly ILogger _logger;
+
+    public string Route(Type messageType, QueueOrTopic queueOrTopic, string applicationName)
+    {
+        var route = _innerRouter.Route(messageType, queueOrTopic, applicationName);
+
+        _logger.LogDebug(
+            "Routing {MessageType} ({QueueOrTopic}) to {Route}",
+            messageType.Name,
+            queueOrTopic,
+            route
+        );
+
+        return route;
+    }
+}
+```
+
+## Migration Strategies
+
+### Gradual Route Changes
+
+When changing routing, support both old and new routes temporarily:
+
+```csharp
+public class MigrationRouter : IRouter
+{
+    private readonly DateTime _migrationCutoff = new DateTime(2025, 3, 1);
+
+    public string Route(Type messageType, QueueOrTopic queueOrTopic, string applicationName)
+    {
+        // Old route: Application.MessageType
+        // New route: Application.Domain.MessageType
+
+        if (DateTime.UtcNow < _migrationCutoff)
+        {
+            // During migration: send to both
+            return GetLegacyRoute(messageType, applicationName);
+        }
+        else
+        {
+            // After migration: use new route
+            return GetNewRoute(messageType, applicationName);
+        }
+    }
+}
+```
+
+### Dual Subscription
+
+Listen to both old and new routes during migration:
+
+```csharp
+var bus = new BusBuilder()
+    .Configure()
+    .WithRouter(new DualSubscriptionRouter())
+    .Build();
+
+public class DualSubscriptionRouter : IRouter
+{
+    public string Route(Type messageType, QueueOrTopic queueOrTopic, string applicationName)
+    {
+        // Return both routes separated by a delimiter
+        // Nimbus will subscribe to both
+        var oldRoute = $"legacy.{applicationName}.{messageType.Name}";
+        var newRoute = $"{applicationName}.{messageType.Name}";
+
+        return $"{oldRoute}|{newRoute}";
+    }
+}
+```
+
+## Common Routing Patterns
+
+### Pattern 1: One Queue Per Message Type (Default)
+
+```
+PlaceOrderCommand    → Queue: OrderService.PlaceOrderCommand
+UpdateOrderCommand   → Queue: OrderService.UpdateOrderCommand
+CancelOrderCommand   → Queue: OrderService.CancelOrderCommand
+```
+
+**Pros**: Simple, clear, easy to monitor
+**Cons**: Many queues for large applications
+
+### Pattern 2: Grouped Queues
+
+```
+PlaceOrderCommand    → Queue: OrderService.OrderCommands
+UpdateOrderCommand   → Queue: OrderService.OrderCommands
+CancelOrderCommand   → Queue: OrderService.OrderCommands
+```
+
+**Pros**: Fewer queues, grouped processing
+**Cons**: Less visibility, one slow message affects others
+
+### Pattern 3: Priority Queues
+
+```
+HighPriorityCommand  → Queue: OrderService.HighPriority
+NormalCommand        → Queue: OrderService.Normal
+LowPriorityCommand   → Queue: OrderService.LowPriority
+```
+
+**Pros**: Priority-based processing
+**Cons**: Requires custom routing and multiple listeners
+
+### Pattern 4: Regional Queues
+
+```
+PlaceOrderCommand {Region="US"}   → Queue: OrderService.US.PlaceOrderCommand
+PlaceOrderCommand {Region="EU"}   → Queue: OrderService.EU.PlaceOrderCommand
+PlaceOrderCommand {Region="APAC"} → Queue: OrderService.APAC.PlaceOrderCommand
+```
+
+**Pros**: Geographical partitioning, compliance
+**Cons**: More complex routing logic
+
+## Next Steps
+
+- **[Dependency Injection](/docs/architecture/dependency-injection)** - Learn how DI works with routing
+- **[Transports](/docs/transports)** - Understand transport-specific routing limitations
+- **[Advanced Topics](/docs/advanced/interceptors)** - Add cross-cutting concerns to routing

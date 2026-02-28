@@ -1,0 +1,320 @@
+---
+title: "Architecture Overview"
+description: "Understand the core architecture and design patterns of Nimbus"
+category: "architecture"
+order: 1
+---
+
+import Callout from '@components/ui/Callout.astro';
+import Card from '@components/ui/Card.astro';
+
+## Core Architecture
+
+Nimbus is designed around a layered architecture that separates concerns and provides flexibility:
+
+```
+┌─────────────────────────────────────┐
+│     Your Application Code           │
+│  (Commands, Events, Handlers)       │
+└──────────────┬──────────────────────┘
+               │
+┌──────────────▼──────────────────────┐
+│          IBus Interface             │
+│   (Send, Publish, Request, etc.)    │
+└──────────────┬──────────────────────┘
+               │
+┌──────────────▼──────────────────────┐
+│      Message Dispatchers            │
+│   (Route messages to handlers)      │
+└──────────────┬──────────────────────┘
+               │
+┌──────────────▼──────────────────────┐
+│     Transport Abstraction           │
+│      (INimbusTransport)             │
+└──────────────┬──────────────────────┘
+               │
+     ┌─────────┼─────────┬───────────┐
+     │         │         │           │
+┌────▼───┐ ┌──▼────┐ ┌──▼──────┐ ┌──▼────┐
+│ Azure  │ │ Redis │ │  AMQP   │ │InProc │
+│Service │ │       │ │         │ │       │
+│  Bus   │ │       │ │         │ │       │
+└────────┘ └───────┘ └─────────┘ └───────┘
+```
+
+## Core Design Patterns
+
+Nimbus implements several messaging patterns to handle different communication scenarios:
+
+<div class="grid grid-cols-1 md:grid-cols-2 gap-6 my-6">
+  <Card title="Commands" icon="⚡">
+    **Fire-and-forget** messages sent to a single handler. Perfect for actions like "PlaceOrder" or "SendEmail".
+
+    ```csharp
+    public class PlaceOrderCommand : IBusCommand
+    {
+        public string OrderId { get; set; }
+    }
+    ```
+  </Card>
+
+  <Card title="Events" icon="📡">
+    **Pub/sub** messages that notify multiple subscribers. Two types:
+    - **Competing**: One handler processes (load balanced)
+    - **Multicast**: All handlers process
+
+    ```csharp
+    public class OrderPlacedEvent : IBusEvent
+    {
+        public string OrderId { get; set; }
+    }
+    ```
+  </Card>
+
+  <Card title="Requests" icon="🔄">
+    **Request/response** pattern for querying data. Single handler returns a response.
+
+    ```csharp
+    public class GetOrderRequest :
+        IBusRequest<GetOrderRequest, OrderDto>
+    {
+        public string OrderId { get; set; }
+    }
+    ```
+  </Card>
+
+  <Card title="Multicast Requests" icon="📬">
+    **One-to-many** request pattern. Multiple handlers can respond.
+
+    ```csharp
+    public class FindAvailableDriversRequest :
+        IBusMulticastRequest<Request, DriverDto>
+    {
+        public string Location { get; set; }
+    }
+    ```
+  </Card>
+</div>
+
+<Callout type="info">
+**When to use which pattern?**
+- **Commands**: "Do this" (imperative actions)
+- **Events**: "This happened" (notifications)
+- **Requests**: "Get me this" (queries)
+- **Multicast Requests**: "Who can help?" (distributed queries)
+</Callout>
+
+## Message Flow
+
+Here's how a message flows through Nimbus:
+
+### Sending a Message
+
+```
+Your Code
+   │
+   ├─> bus.Send(command)
+   │
+   ├─> IRouter (determines queue/topic path)
+   │
+   ├─> ISerializer (serializes message)
+   │
+   ├─> INimbusMessageSender (transport-specific sender)
+   │
+   └─> Queue/Topic on messaging infrastructure
+```
+
+### Receiving a Message
+
+```
+Queue/Topic on messaging infrastructure
+   │
+   ├─> INimbusMessageReceiver (transport-specific receiver)
+   │
+   ├─> MessagePump (pulls messages continuously)
+   │
+   ├─> IInboundInterceptor (before handling)
+   │
+   ├─> MessageDispatcher (finds handler)
+   │
+   ├─> IDependencyResolver (creates handler instance)
+   │
+   ├─> Handler.Handle(message)
+   │
+   └─> IInboundInterceptor (after handling)
+```
+
+## Key Components
+
+### IBus Interface
+
+The main entry point for all messaging operations:
+
+```csharp
+public interface IBus
+{
+    // Commands
+    Task Send<TCommand>(TCommand command) where TCommand : IBusCommand;
+
+    // Events
+    Task Publish<TEvent>(TEvent @event) where TEvent : IBusEvent;
+
+    // Requests
+    Task<TResponse> Request<TRequest, TResponse>(TRequest request)
+        where TRequest : IBusRequest<TRequest, TResponse>;
+
+    // Multicast Requests
+    IEnumerable<Task<TResponse>> MulticastRequest<TRequest, TResponse>(
+        TRequest request, TimeSpan timeout)
+        where TRequest : IBusMulticastRequest<TRequest, TResponse>;
+
+    // Lifecycle
+    Task Start();
+    Task Stop();
+}
+```
+
+### NimbusMessage Envelope
+
+All messages are wrapped in a `NimbusMessage` envelope that contains:
+
+- **MessageId**: Unique identifier for the message
+- **CorrelationId**: For tracking related messages
+- **From/To/DeliverTo**: Routing information
+- **DeliverAfter/ExpiresAfter**: Scheduling and TTL
+- **DeliveryAttempts**: Retry tracking
+- **Properties**: Metadata dictionary
+- **Payload**: The actual message object
+
+### Transport Abstraction
+
+All transports implement `INimbusTransport`:
+
+```csharp
+internal interface INimbusTransport
+{
+    INimbusMessageSender GetQueueSender(string queuePath);
+    INimbusMessageReceiver GetQueueReceiver(string queuePath);
+    INimbusMessageSender GetTopicSender(string topicPath);
+    INimbusMessageReceiver GetTopicReceiver(
+        string topicPath,
+        string subscriptionName,
+        IFilterCondition filter);
+}
+```
+
+This abstraction allows Nimbus to work with any messaging infrastructure without changing your code.
+
+## Dependency Injection
+
+Nimbus uses its own DI abstractions to stay container-agnostic:
+
+```csharp
+public interface IDependencyResolver
+{
+    object Resolve(Type type);
+    IDependencyResolverScope CreateChildScope();
+}
+```
+
+### Scope Management
+
+- Each message creates a **child scope** for handler resolution
+- Handlers and dependencies are resolved per-message
+- Singleton services: Bus, senders, routers, serializers
+- Scoped services: Handlers, message-specific dependencies
+
+<Callout type="tip">
+This ensures handlers don't accidentally share state between messages and makes testing easier.
+</Callout>
+
+## Routing
+
+The `IRouter` interface determines how message types map to queue/topic paths:
+
+```csharp
+public interface IRouter
+{
+    string Route(Type messageType, QueueOrTopic queueOrTopic);
+}
+```
+
+**Default Router**: `DestinationPerMessageTypeRouter`
+- Creates one queue/topic per message type
+- Path format: `{applicationName}.{messageTypeName}`
+- Example: `OrderService.PlaceOrderCommand`
+
+## Type Resolution
+
+The `ITypeProvider` scans assemblies for:
+
+- Message types (`IBusCommand`, `IBusEvent`, etc.)
+- Handler types (`IHandleCommand<T>`, etc.)
+
+```csharp
+var typeProvider = new AssemblyScanningTypeProvider(
+    typeof(MyCommand).Assembly,
+    typeof(MyHandler).Assembly
+);
+```
+
+This information is used for:
+- Routing messages to correct queues/topics
+- Dispatching messages to correct handlers
+- Efficient serialization/deserialization
+
+## Interceptors
+
+Add cross-cutting concerns using interceptors:
+
+### Inbound Interceptors
+
+Process messages before/after handling:
+
+```csharp
+public class LoggingInterceptor : IInboundInterceptor
+{
+    public async Task OnCommandHandlerExecuting<TCommand>(
+        TCommand command, HandlerContext context)
+    {
+        Log.Information("Handling command: {CommandType}",
+            typeof(TCommand).Name);
+    }
+
+    public async Task OnCommandHandlerSuccess<TCommand>(
+        TCommand command, HandlerContext context)
+    {
+        Log.Information("Command handled successfully");
+    }
+
+    public async Task OnCommandHandlerError<TCommand>(
+        TCommand command, HandlerContext context, Exception exception)
+    {
+        Log.Error(exception, "Command handling failed");
+    }
+}
+```
+
+### Outbound Interceptors
+
+Process messages before/after sending:
+
+```csharp
+public class MetricsInterceptor : IOutboundInterceptor
+{
+    public async Task OnCommandSending<TCommand>(
+        TCommand command)
+    {
+        Metrics.Increment("commands_sent");
+    }
+}
+```
+
+## Next Steps
+
+Dive deeper into specific aspects of the architecture:
+
+- **[Message Patterns](/docs/architecture/message-patterns)** - Detailed guide to commands, events, and requests
+- **[Transport Abstraction](/docs/architecture/transport-abstraction)** - How Nimbus achieves transport independence
+- **[Routing](/docs/architecture/routing)** - Advanced routing strategies
+- **[Dependency Injection](/docs/architecture/dependency-injection)** - DI patterns and best practices

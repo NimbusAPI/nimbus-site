@@ -1,0 +1,81 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --color-background: 255 255 255;
+    --color-text: 23 23 23;
+  }
+
+  body {
+    background-color: rgb(var(--color-background));
+    color: rgb(var(--color-text));
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+@layer components {
+  /* Enhanced code block styling */
+  .prose pre {
+    @apply my-6 rounded-xl overflow-hidden;
+    @apply border border-gray-300;
+    box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.08), 0 2px 4px -2px rgb(0 0 0 / 0.06);
+  }
+
+  /* Editor chrome header with window dots */
+  .prose pre::before {
+    content: '';
+    display: block;
+    height: 2.75rem;
+    background-color: #f3f4f6;
+    border-bottom: 1px solid #e5e7eb;
+    background-image:
+      radial-gradient(circle at center, #fca5a5 0%, #fca5a5 50%, transparent 50%),
+      radial-gradient(circle at center, #fde68a 0%, #fde68a 50%, transparent 50%),
+      radial-gradient(circle at center, #86efac 0%, #86efac 50%, transparent 50%);
+    background-size: 12px 12px;
+    background-position: 16px center, 34px center, 52px center;
+    background-repeat: no-repeat;
+  }
+
+  .prose pre code {
+    @apply block p-6 overflow-x-auto;
+    @apply text-sm leading-relaxed;
+  }
+
+  .prose code {
+    @apply px-1.5 py-0.5 rounded;
+    @apply bg-gray-100;
+    @apply text-pink-600;
+    @apply text-sm font-mono;
+  }
+
+  .prose pre code {
+    @apply bg-transparent text-inherit;
+  }
+
+  /* Add more spacing around code blocks in lists */
+  .prose li > pre {
+    @apply my-4;
+  }
+
+  /* Improve inline code in headings */
+  .prose h1 code,
+  .prose h2 code,
+  .prose h3 code,
+  .prose h4 code {
+    @apply text-inherit font-semibold;
+  }
+
+  /* Better visual hierarchy for sections with code */
+  .prose h2 + pre,
+  .prose h3 + pre {
+    @apply mt-4;
+  }
+
+  .prose pre + h2,
+  .prose pre + h3 {
+    @apply mt-8;
+  }
+}

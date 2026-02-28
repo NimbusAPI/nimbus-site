@@ -1,0 +1,70 @@
+---
+import { Image } from 'astro:assets';
+import logo from '../../assets/logo.png';
+---
+
+<footer class="border-t border-gray-200 bg-white">
+  <div class="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
+      <!-- About -->
+      <div class="md:col-span-2">
+        <div class="mb-3">
+          <Image
+            src={logo}
+            alt="NimbusAPI"
+            height={48}
+            class="h-12 w-auto"
+          />
+        </div>
+        <p class="text-sm text-gray-600 mb-4">
+          Transport-agnostic .NET messaging framework. Run on Azure Service Bus, Redis, AMQP, SQL Server, PostgreSQL, or in-process — same code, any transport.
+        </p>
+      </div>
+
+      <!-- Documentation -->
+      <div>
+        <h4 class="text-sm font-semibold text-gray-900 mb-3">Documentation</h4>
+        <ul class="space-y-2">
+          <li>
+            <a href="/docs/getting-started" class="text-sm text-gray-600 hover:text-blue-600 transition-colors">
+              Getting Started
+            </a>
+          </li>
+          <li>
+            <a href="/docs/architecture" class="text-sm text-gray-600 hover:text-blue-600 transition-colors">
+              Architecture
+            </a>
+          </li>
+          <li>
+            <a href="/docs/examples/cafe-application" class="text-sm text-gray-600 hover:text-blue-600 transition-colors">
+              Examples
+            </a>
+          </li>
+        </ul>
+      </div>
+
+      <!-- Community -->
+      <div>
+        <h4 class="text-sm font-semibold text-gray-900 mb-3">Community</h4>
+        <ul class="space-y-2">
+          <li>
+            <a href="https://github.com/NimbusAPI/Nimbus" target="_blank" rel="noopener noreferrer" class="text-sm text-gray-600 hover:text-blue-600 transition-colors">
+              GitHub
+            </a>
+          </li>
+          <li>
+            <a href="https://github.com/NimbusAPI/Nimbus/issues" target="_blank" rel="noopener noreferrer" class="text-sm text-gray-600 hover:text-blue-600 transition-colors">
+              Issues
+            </a>
+          </li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="mt-8 pt-8 border-t border-gray-200">
+      <p class="text-sm text-gray-600 text-center">
+        © {new Date().getFullYear()} Nimbus. Released under the MIT License.
+      </p>
+    </div>
+  </div>
+</footer>

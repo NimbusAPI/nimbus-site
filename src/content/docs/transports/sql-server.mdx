@@ -1,0 +1,483 @@
+---
+title: "SQL Server"
+description: "Use Nimbus with SQL Server as a message transport — no additional broker required"
+category: "transports"
+order: 5
+---
+
+import Callout from '@components/ui/Callout.astro';
+
+## Overview
+
+The Nimbus SQL Server transport uses an existing SQL Server database as a message broker. Messages are stored in database tables and delivered via polling, making it a great choice for applications that already rely on SQL Server and want to add messaging without introducing a separate infrastructure component.
+
+<Callout type="info">
+**No broker required**: This transport runs entirely within your existing SQL Server instance. No message broker installation or management is needed.
+</Callout>
+
+## Key Benefits
+
+- **Zero additional infrastructure**: Uses your existing SQL Server database
+- **Atomic delivery**: Messages are dequeued atomically — no duplicates, no loss
+- **Concurrent consumers**: SQL locking (`UPDLOCK`, `READPAST`) allows multiple consumers per queue
+- **Scheduled delivery**: Built-in support for delayed and scheduled messages
+- **Dead letter office**: Failed messages are tracked in a dedicated table
+- **Auto schema creation**: Tables can be created automatically on startup
+- **FIFO ordering**: Messages delivered in temporal order within each queue
+
+## When to Use SQL Server
+
+**Great for**:
+- Applications already backed by SQL Server
+- Environments where adding a message broker is not an option
+- Lower-throughput workloads where simplicity matters
+- Local development and testing without a separate broker
+- Disaster recovery scenarios where SQL Server HA is already in place
+
+**Consider alternatives if**:
+- You need very high message throughput (use Redis or Azure Service Bus)
+- You want a fully managed cloud messaging service (use Azure Service Bus)
+- You need open-protocol interoperability (use AMQP)
+
+## Installation
+
+```bash
+dotnet add package Nimbus.Transports.SqlServer
+```
+
+## Quick Start
+
+### Basic Configuration
+
+```csharp
+using Nimbus;
+using Nimbus.Configuration;
+using Nimbus.Transports.SqlServer;
+
+var transport = new SqlServerTransportConfiguration()
+    .WithConnectionString("Server=localhost;Database=Nimbus;Integrated Security=true;")
+    .WithAutoCreateSchema();
+
+var bus = new BusBuilder()
+    .Configure()
+    .WithNames("OrderService", Environment.MachineName)
+    .WithTransport(transport)
+    .WithTypesFrom(typeProvider)
+    .WithAutofacDefaults(container)
+    .Build();
+
+await bus.Start();
+```
+
+### Send a Message
+
+```csharp
+public class PlaceOrderCommand : IBusCommand
+{
+    public string OrderId { get; set; }
+    public decimal Amount { get; set; }
+}
+
+await bus.Send(new PlaceOrderCommand
+{
+    OrderId = "ORDER-123",
+    Amount = 99.99m
+});
+```
+
+## Configuration
+
+### WithConnectionString(string connectionString)
+
+Sets the SQL Server connection string. This is the only required setting.
+
+```csharp
+var transport = new SqlServerTransportConfiguration()
+    .WithConnectionString("Server=myserver;Database=Nimbus;User Id=sa;Password=secret;TrustServerCertificate=true;");
+```
+
+### WithAutoCreateSchema()
+
+Instructs Nimbus to create the required database tables on startup if they do not exist. All DDL operations are idempotent, so it is safe to leave this enabled in production.
+
+```csharp
+var transport = new SqlServerTransportConfiguration()
+    .WithConnectionString("...")
+    .WithAutoCreateSchema();
+```
+
+<Callout type="warning">
+If `WithAutoCreateSchema()` is not called, the tables must be created manually before starting the bus. See the [Schema](#schema) section for the SQL script.
+</Callout>
+
+### WithPollInterval(TimeSpan pollInterval)
+
+Sets how frequently Nimbus polls for new messages. The default is **1000 ms** (1 second).
+
+```csharp
+var transport = new SqlServerTransportConfiguration()
+    .WithConnectionString("...")
+    .WithPollInterval(TimeSpan.FromMilliseconds(250));  // More responsive
+```
+
+**Tuning tips**:
+- Lower values reduce latency but increase database load
+- For low-traffic services, the default 1 s is fine
+- For latency-sensitive workloads, try 100–250 ms
+- For batch-style workloads, 5–30 s may be appropriate
+
+### From Configuration
+
+```csharp
+// appsettings.json
+{
+  "Messaging": {
+    "SqlServer": {
+      "ConnectionString": "Server=localhost;Database=Nimbus;Integrated Security=true;",
+      "PollIntervalMs": 500
+    }
+  }
+}
+
+// Program.cs
+var settings = configuration.GetSection("Messaging:SqlServer");
+var transport = new SqlServerTransportConfiguration()
+    .WithConnectionString(settings["ConnectionString"])
+    .WithPollInterval(TimeSpan.FromMilliseconds(int.Parse(settings["PollIntervalMs"])))
+    .WithAutoCreateSchema();
+```
+
+## Schema
+
+Nimbus uses three tables. You can let Nimbus create them automatically with `WithAutoCreateSchema()`, or create them manually using the SQL below.
+
+### NimbusMessages
+
+Stores all in-flight messages for both queues and topic subscribers.
+
+```sql
+CREATE TABLE dbo.NimbusMessages (
+    MessageId    UNIQUEIDENTIFIER NOT NULL PRIMARY KEY,
+    Destination  NVARCHAR(255)    NOT NULL,
+    Body         VARBINARY(MAX)   NOT NULL,
+    VisibleAfter DATETIME2        NOT NULL,
+    ExpiresAt    DATETIME2        NULL
+);
+
+CREATE INDEX IX_NimbusMessages_Dequeue
+    ON dbo.NimbusMessages (Destination, VisibleAfter)
+    INCLUDE (ExpiresAt);
+```
+
+- `Destination` is the queue name (or subscriber queue for topics)
+- `VisibleAfter` implements scheduled/delayed delivery
+- `ExpiresAt` implements message TTL (nullable — NULL means no expiry)
+
+### NimbusSubscriptions
+
+Tracks which queues are subscribed to which topics.
+
+```sql
+CREATE TABLE dbo.NimbusSubscriptions (
+    TopicName       NVARCHAR(255) NOT NULL,
+    SubscriberQueue NVARCHAR(255) NOT NULL,
+    PRIMARY KEY (TopicName, SubscriberQueue)
+);
+```
+
+Subscriptions are registered automatically when the bus starts and new subscribers are discovered.
+
+### NimbusDeadLetters
+
+Stores messages that failed all delivery attempts.
+
+```sql
+CREATE TABLE dbo.NimbusDeadLetters (
+    MessageId           UNIQUEIDENTIFIER NOT NULL PRIMARY KEY,
+    OriginalDestination NVARCHAR(255)    NULL,
+    Body                VARBINARY(MAX)   NOT NULL,
+    DeliveryAttempts    INT              NOT NULL,
+    FailedAt            DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME()
+);
+```
+
+## Features
+
+### Atomic Dequeue
+
+Messages are dequeued using a single atomic `DELETE ... OUTPUT` statement. There is no separate lock/unlock cycle, which means:
+
+- A message is never visible to two consumers simultaneously
+- A message is never lost if a consumer crashes after dequeuing
+- No compensating transactions are required
+
+```sql
+-- Internal dequeue query (simplified)
+DELETE TOP (1) FROM dbo.NimbusMessages WITH (UPDLOCK, READPAST)
+OUTPUT DELETED.*
+WHERE Destination = @destination
+  AND VisibleAfter <= SYSUTCDATETIME()
+  AND (ExpiresAt IS NULL OR ExpiresAt > SYSUTCDATETIME())
+ORDER BY VisibleAfter, MessageId;
+```
+
+### Concurrent Consumers
+
+The `UPDLOCK` + `READPAST` locking hints allow multiple consumer instances to poll the same queue simultaneously without blocking each other. Each consumer gets a different message or skips the queue gracefully if it is empty.
+
+### Scheduled Delivery
+
+Messages can be delayed or scheduled using the standard Nimbus API:
+
+```csharp
+// Deliver after a delay
+await bus.SendAfter(new RetryCommand { ... }, TimeSpan.FromMinutes(5));
+
+// Deliver at a specific time
+await bus.SendAt(new ReminderCommand { ... }, DateTimeOffset.UtcNow.AddHours(1));
+```
+
+Internally, `VisibleAfter` is set to the scheduled time. The polling query filters out messages whose `VisibleAfter` is in the future.
+
+### Topics and Fan-out
+
+When a message is published to a topic, Nimbus looks up all registered subscriber queues in `NimbusSubscriptions` and inserts one copy of the message per subscriber. Each subscriber then receives its own copy independently.
+
+```csharp
+// Publish an event to all subscribers
+await bus.Publish(new OrderPlacedEvent { OrderId = "ORDER-123" });
+```
+
+### Dead Letter Office
+
+Messages that cannot be delivered are moved to the `NimbusDeadLetters` table. You can inspect them programmatically:
+
+```csharp
+// Inject IDeadLetterOffice
+var count = await deadLetterOffice.Count();
+var message = await deadLetterOffice.Peek();   // View without removing
+var message = await deadLetterOffice.Pop();    // Remove for re-processing
+```
+
+Dead letters are retrieved oldest-first by `FailedAt` timestamp.
+
+### Message Expiry
+
+Messages can be given a time-to-live (TTL). Expired messages are filtered out during dequeue and are never delivered to handlers.
+
+```csharp
+// TTL is set via the Nimbus message envelope — refer to your handler configuration
+```
+
+## Database Setup
+
+### SQL Server via Docker
+
+```bash
+docker run -d \
+  --name sqlserver \
+  -e "ACCEPT_EULA=Y" \
+  -e "SA_PASSWORD=YourStrong!Passw0rd" \
+  -p 1433:1433 \
+  mcr.microsoft.com/mssql/server:2022-latest
+```
+
+Or with Docker Compose:
+
+```yaml
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      SA_PASSWORD: "YourStrong!Passw0rd"
+    ports:
+      - "1433:1433"
+```
+
+Connection string for the above:
+
+```csharp
+var transport = new SqlServerTransportConfiguration()
+    .WithConnectionString(
+        "Server=localhost,1433;Database=Nimbus;User Id=sa;" +
+        "Password=YourStrong!Passw0rd;TrustServerCertificate=true;")
+    .WithAutoCreateSchema();
+```
+
+### Managed SQL Server (Azure SQL, RDS, etc.)
+
+```csharp
+var transport = new SqlServerTransportConfiguration()
+    .WithConnectionString(
+        "Server=myserver.database.windows.net;" +
+        "Database=NimbusMessages;" +
+        "Authentication=Active Directory Default;")
+    .WithAutoCreateSchema();
+```
+
+## Performance Considerations
+
+### Poll Interval vs. Latency
+
+The default 1-second poll interval means messages may be delayed up to 1 second after being sent. If lower latency is required, reduce the poll interval at the cost of more frequent database queries.
+
+| Poll interval | Message latency | DB queries/consumer/min |
+|---|---|---|
+| 100 ms | ~100 ms | 600 |
+| 250 ms | ~250 ms | 240 |
+| 1000 ms (default) | ~1 s | 60 |
+| 5000 ms | ~5 s | 12 |
+
+### Index Maintenance
+
+The `IX_NimbusMessages_Dequeue` index on `(Destination, VisibleAfter)` is the hot path for message delivery. Keep this index healthy with regular maintenance in busy deployments.
+
+### Message Table Growth
+
+Expired messages and dead-letter records accumulate over time. Consider a periodic cleanup job:
+
+```sql
+-- Remove expired messages older than 7 days
+DELETE FROM dbo.NimbusMessages
+WHERE ExpiresAt IS NOT NULL AND ExpiresAt < DATEADD(DAY, -7, SYSUTCDATETIME());
+
+-- Archive or purge old dead letters
+DELETE FROM dbo.NimbusDeadLetters
+WHERE FailedAt < DATEADD(DAY, -30, SYSUTCDATETIME());
+```
+
+## Best Practices
+
+### 1. Use a Dedicated Database or Schema
+
+Keep Nimbus tables in a dedicated database or at minimum a dedicated schema to avoid name collisions and simplify permissions.
+
+### 2. Register as a Singleton
+
+```csharp
+// ✅ GOOD: Single bus instance shared across the application
+services.AddSingleton<IBus>(provider =>
+{
+    var bus = new BusBuilder()
+        .Configure()
+        .WithNames("OrderService", Environment.MachineName)
+        .WithTransport(transport)
+        .Build();
+    bus.Start().Wait();
+    return bus;
+});
+```
+
+### 3. Least-Privilege SQL User
+
+Grant the Nimbus database user only the permissions it needs:
+
+```sql
+-- Create a dedicated login
+CREATE LOGIN nimbus_user WITH PASSWORD = 'StrongPassword!';
+CREATE USER nimbus_user FOR LOGIN nimbus_user;
+
+-- Grant required permissions
+GRANT SELECT, INSERT, DELETE ON dbo.NimbusMessages     TO nimbus_user;
+GRANT SELECT, INSERT, DELETE ON dbo.NimbusSubscriptions TO nimbus_user;
+GRANT SELECT, INSERT, DELETE ON dbo.NimbusDeadLetters   TO nimbus_user;
+
+-- Only if using WithAutoCreateSchema()
+GRANT CREATE TABLE TO nimbus_user;
+GRANT ALTER ON SCHEMA::dbo TO nimbus_user;
+```
+
+### 4. Monitor Dead Letters
+
+Poll the dead letter count regularly and alert on unexpected growth:
+
+```csharp
+public class DeadLetterHealthCheck : IHealthCheck
+{
+    private readonly IDeadLetterOffice _deadLetterOffice;
+    private const int WarningThreshold = 100;
+
+    public async Task<HealthCheckResult> CheckHealthAsync(
+        HealthCheckContext context,
+        CancellationToken cancellationToken = default)
+    {
+        var count = await _deadLetterOffice.Count();
+        return count < WarningThreshold
+            ? HealthCheckResult.Healthy($"{count} dead letters")
+            : HealthCheckResult.Degraded($"{count} dead letters — investigation required");
+    }
+}
+```
+
+## Limitations
+
+### No Large Message Store
+
+The SQL Server transport does not support external large message body storage (e.g., Azure Blob Storage). All message content is stored as `VARBINARY(MAX)` in the database. Keep individual message payloads small; for large payloads, use a claim-check pattern and store the data externally.
+
+### Polling-Based Delivery
+
+Messages are delivered via polling rather than push. This means:
+- There is inherent latency equal to up to one poll interval
+- Database query load scales with the number of consumers and poll frequency
+
+### No Namespace Cleaning in Production
+
+`INamespaceCleanser.RemoveAllExistingNamespaceElements()` deletes all subscriptions, messages, and dead letters. It is intended for use in integration tests only — do not call it in production.
+
+```csharp
+// ✅ Safe in tests
+await namespaceCleaner.RemoveAllExistingNamespaceElements();
+
+// ❌ Dangerous in production — deletes everything
+```
+
+## Compatibility
+
+- ✅ **SQL Server 2016+**
+- ✅ **Azure SQL Database**
+- ✅ **SQL Server on Linux (Docker)**
+- ✅ **.NET Standard 2.0+**
+- ✅ **Microsoft.Data.SqlClient 5.x**
+
+## Common Issues
+
+### Issue: Tables not found on startup
+
+**Cause**: `WithAutoCreateSchema()` was not called and tables were not created manually.
+
+**Solution**: Either add `.WithAutoCreateSchema()` to your configuration, or run the schema SQL manually before starting the bus.
+
+### Issue: High database CPU
+
+**Cause**: Poll interval is too low, or many consumers are polling simultaneously.
+
+**Solution**: Increase the poll interval or reduce the number of consumer instances.
+
+```csharp
+.WithPollInterval(TimeSpan.FromSeconds(2))
+```
+
+### Issue: Messages are delayed
+
+**Cause**: Poll interval is too high for your latency requirements.
+
+**Solution**: Reduce the poll interval.
+
+```csharp
+.WithPollInterval(TimeSpan.FromMilliseconds(100))
+```
+
+### Issue: Login failed
+
+**Cause**: Incorrect connection string credentials, or the SQL user lacks permissions.
+
+**Solution**: Verify connection string and check that the database user has `SELECT`, `INSERT`, and `DELETE` on all three Nimbus tables.
+
+## Next Steps
+
+- Learn about [message patterns](/docs/architecture/message-patterns)
+- Implement [error handling](/docs/advanced/error-handling) strategies
+- Set up [monitoring and logging](/docs/guides/logging)
+- Explore [testing strategies](/docs/guides/testing)

@@ -1,0 +1,185 @@
+---
+title: "Commands"
+description: "Use commands in Nimbus for fire-and-forget actions handled by a single consumer"
+category: "messaging"
+order: 1
+---
+
+import Callout from '@components/ui/Callout.astro';
+
+## What is a Command?
+
+A command is a message that tells a service to **do something**. It represents an intent to perform an action and is handled by exactly one handler. Commands are the backbone of task distribution in distributed systems.
+
+**Key properties:**
+- **One handler**: Exactly one handler processes each command instance
+- **Queue-based delivery**: Commands are placed on a queue, enabling competing consumers
+- **Imperative naming**: Named with verbs in imperative form (`PlaceOrder`, `SendEmail`, `ProcessPayment`)
+- **Fire-and-forget**: The sender does not wait for the handler to complete
+
+<Callout type="info">
+Commands differ from events in that they **direct** a specific action to happen, while events **notify** that something has already happened.
+</Callout>
+
+## Defining a Command
+
+Implement `IBusCommand` to create a command message:
+
+```csharp
+using Nimbus.MessageContracts;
+
+public class PlaceOrderCommand : IBusCommand
+{
+    public string OrderId { get; set; }
+    public string CustomerId { get; set; }
+    public List<OrderItem> Items { get; set; }
+    public decimal TotalAmount { get; set; }
+}
+```
+
+Keep command properties focused on the data needed to perform the action. Avoid embedding business logic in the message contract itself.
+
+## Creating a Handler
+
+Implement `IHandleCommand<TCommand>` to process the command:
+
+```csharp
+using Nimbus.Handlers;
+
+public class PlaceOrderHandler : IHandleCommand<PlaceOrderCommand>
+{
+    private readonly IOrderRepository _orderRepository;
+    private readonly IBus _bus;
+
+    public PlaceOrderHandler(IOrderRepository orderRepository, IBus bus)
+    {
+        _orderRepository = orderRepository;
+        _bus = bus;
+    }
+
+    public async Task Handle(PlaceOrderCommand command)
+    {
+        var order = new Order
+        {
+            Id = command.OrderId,
+            CustomerId = command.CustomerId,
+            Items = command.Items,
+            TotalAmount = command.TotalAmount,
+            Status = OrderStatus.Pending
+        };
+
+        await _orderRepository.Save(order);
+
+        // Raise an event to notify other services
+        await _bus.Publish(new OrderPlacedEvent
+        {
+            OrderId = command.OrderId,
+            CustomerId = command.CustomerId,
+            TotalAmount = command.TotalAmount
+        });
+    }
+}
+```
+
+Nimbus resolves handler dependencies from your DI container, so constructor injection works naturally.
+
+## Sending a Command
+
+Use `IBus.Send` to dispatch a command:
+
+```csharp
+await bus.Send(new PlaceOrderCommand
+{
+    OrderId = Guid.NewGuid().ToString(),
+    CustomerId = "CUST-123",
+    Items = cart.Items,
+    TotalAmount = cart.Total
+});
+```
+
+`Send` is non-blocking — it enqueues the command and returns. Your handler runs asynchronously, potentially on a different machine.
+
+## Competing Consumers
+
+Commands are queue-based, so multiple instances of your application can process commands in parallel. This gives you horizontal scaling for free:
+
+```
+[Producer]
+    │
+    ▼
+[Command Queue]
+    ├──▶ [Handler Instance A]
+    ├──▶ [Handler Instance B]
+    └──▶ [Handler Instance C]
+```
+
+Each command is delivered to exactly one handler instance. Nimbus and the underlying transport coordinate delivery — no additional configuration is needed.
+
+## Delayed Dispatch
+
+Some transports support scheduling a command for future execution:
+
+```csharp
+await bus.Send(new SendReminderEmailCommand
+{
+    UserId = "USER-456",
+    TemplateId = "order-reminder"
+},
+deliverAt: DateTimeOffset.UtcNow.AddHours(24));
+```
+
+<Callout type="tip">
+Check the [Transports overview](/docs/transports) for which transports support delayed delivery.
+</Callout>
+
+## Error Handling
+
+If a handler throws an exception, the transport retries delivery according to its retry policy. After exhausting retries, the message is moved to a dead-letter queue.
+
+```csharp
+public async Task Handle(PlaceOrderCommand command)
+{
+    try
+    {
+        await _orderRepository.Save(order);
+    }
+    catch (DatabaseException ex)
+    {
+        // Log and rethrow — Nimbus will retry
+        _logger.Error(ex, "Failed to save order {OrderId}", command.OrderId);
+        throw;
+    }
+}
+```
+
+<Callout type="warning">
+Design handlers to be **idempotent** — the same command may be delivered more than once due to retries. Use the command's natural identifier (like `OrderId`) to detect and skip duplicate processing.
+</Callout>
+
+## Handler Registration
+
+Register your handlers with your DI container. With Autofac:
+
+```csharp
+builder.RegisterAssemblyTypes(typeof(PlaceOrderHandler).Assembly)
+       .AsImplementedInterfaces();
+```
+
+Nimbus discovers handlers automatically via the type provider you configure on the bus.
+
+## When to Use Commands
+
+Commands are the right choice when:
+
+- You need to **perform an action** (place an order, send a notification, update a record)
+- **Exactly one handler** should process each message
+- You want **load balancing** across multiple worker instances
+- You don't need the result immediately (fire-and-forget)
+
+If you need a return value from the handler, use a [Request](/docs/messaging/requests) instead.
+
+## Next Steps
+
+- [Events](/docs/messaging/events) — notify multiple subscribers that something happened
+- [Requests](/docs/messaging/requests) — get a response back from a single handler
+- [Message Patterns Overview](/docs/architecture/message-patterns) — compare all four patterns

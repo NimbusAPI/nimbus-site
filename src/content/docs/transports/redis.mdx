@@ -1,0 +1,715 @@
+---
+title: "Redis"
+description: "High-performance messaging with Redis using Nimbus for low-latency, high-throughput scenarios"
+category: "transports"
+order: 3
+---
+
+import Callout from '@components/ui/Callout.astro';
+
+## Overview
+
+Redis is an in-memory data structure store that can be used as a high-performance message broker. The Nimbus Redis transport leverages Redis's Lists (for queues) and Pub/Sub (for topics) to provide ultra-fast messaging with minimal overhead.
+
+## Key Benefits
+
+- **Blazing Fast**: Sub-millisecond latency, 10,000+ messages/second
+- **Simple Setup**: Easy to install and configure
+- **Low Overhead**: Minimal protocol overhead compared to full message brokers
+- **Familiar Technology**: Works with existing Redis infrastructure
+- **Cost Effective**: Free and open source, low resource requirements
+- **Multiple Deployment Options**: Self-hosted, cloud-managed, or serverless
+
+## When to Use Redis
+
+**Great for**:
+- High-throughput scenarios (>1000 msg/sec)
+- Low-latency requirements (sub 10ms)
+- Internal microservices communication
+- Real-time event distribution
+- Background job processing
+- Cache invalidation patterns
+
+**Consider alternatives if you need**:
+- Maximum durability guarantees (use Azure Service Bus)
+- Complex routing and filtering
+- Long message retention (>24 hours)
+- Enterprise compliance requirements
+- Built-in dead-letter queues
+
+## Installation
+
+Install the Redis transport package:
+
+```bash
+dotnet add package Nimbus.Redis
+```
+
+Install Redis server (if not already available):
+
+```bash
+# macOS
+brew install redis
+brew services start redis
+
+# Ubuntu/Debian
+sudo apt-get install redis-server
+sudo systemctl start redis-server
+
+# Docker
+docker run -d -p 6379:6379 redis:latest
+
+# Windows
+# Download from https://github.com/microsoftarchive/redis/releases
+```
+
+## Quick Start
+
+### Basic Configuration
+
+```csharp
+using Nimbus;
+using Nimbus.Configuration;
+using Nimbus.Transports.Redis;
+
+var bus = new BusBuilder()
+    .Configure()
+    .WithTransport(new RedisTransportConfiguration()
+        .WithConnectionString("localhost:6379"))
+    .WithNames("OrderService", Environment.MachineName)
+    .WithTypesFrom(typeProvider)
+    .WithAutofacDefaults(container)
+    .Build();
+
+await bus.Start();
+```
+
+### Send a Message
+
+```csharp
+public class PlaceOrderCommand : IBusCommand
+{
+    public string OrderId { get; set; }
+    public decimal Amount { get; set; }
+}
+
+await bus.Send(new PlaceOrderCommand
+{
+    OrderId = "ORDER-123",
+    Amount = 99.99m
+});
+```
+
+## Connection Configuration
+
+### Connection String
+
+**Simple localhost**:
+```csharp
+var transport = new RedisTransportConfiguration()
+    .WithConnectionString("localhost:6379");
+```
+
+**With password**:
+```csharp
+var transport = new RedisTransportConfiguration()
+    .WithConnectionString("localhost:6379,password=your_redis_password");
+```
+
+**Multiple endpoints (for clusters)**:
+```csharp
+var transport = new RedisTransportConfiguration()
+    .WithConnectionString("redis1:6379,redis2:6379,redis3:6379");
+```
+
+**SSL/TLS**:
+```csharp
+var transport = new RedisTransportConfiguration()
+    .WithConnectionString("your-redis.redis.cache.windows.net:6380,password=...,ssl=true");
+```
+
+**Advanced options**:
+```csharp
+var transport = new RedisTransportConfiguration()
+    .WithConnectionString(
+        "localhost:6379," +
+        "connectTimeout=5000," +      // Connection timeout (ms)
+        "syncTimeout=1000," +          // Operation timeout (ms)
+        "connectRetry=3," +            // Connection retry attempts
+        "abortConnect=false"           // Don't fail if can't connect immediately
+    );
+```
+
+### From Configuration
+
+```csharp
+// appsettings.json
+{
+  "ConnectionStrings": {
+    "Redis": "localhost:6379,password=secret"
+  }
+}
+
+// Program.cs
+var connectionString = configuration.GetConnectionString("Redis");
+var transport = new RedisTransportConfiguration()
+    .WithConnectionString(connectionString);
+```
+
+### Database Selection
+
+Redis supports 16 databases (0-15) by default:
+
+```csharp
+var transport = new RedisTransportConfiguration()
+    .WithConnectionString("localhost:6379")
+    .WithDatabase(1);  // Use database 1 instead of default 0
+
+// Useful for:
+// - Isolating environments (dev=0, staging=1, test=2)
+// - Separating applications
+// - Testing scenarios
+```
+
+## Performance Tuning
+
+### Polling Configuration
+
+Redis uses polling to fetch messages from queues:
+
+```csharp
+var transport = new RedisTransportConfiguration()
+    .WithConnectionString("localhost:6379")
+    .WithPollingInterval(TimeSpan.FromMilliseconds(100))  // Check every 100ms
+    .WithBatchSize(50);                                    // Fetch up to 50 messages at once
+```
+
+**Tuning guidelines**:
+- **Low latency** (real-time): 10-50ms polling interval
+- **Balanced** (default): 100-500ms polling interval
+- **High throughput**: Larger batch sizes (50-200)
+- **Low CPU**: Longer polling intervals (500-1000ms)
+
+### Concurrency Settings
+
+```csharp
+var transport = new RedisTransportConfiguration()
+    .WithConnectionString("localhost:6379")
+    .WithMaxConcurrentHandlers(20)     // Process up to 20 messages concurrently
+    .WithConnectionPoolSize(10);        // Connection pool size
+```
+
+### Pipeline Mode
+
+Use pipelining for better throughput:
+
+```csharp
+var transport = new RedisTransportConfiguration()
+    .WithConnectionString("localhost:6379")
+    .WithPipelinedMode(true)           // Enable pipelining
+    .WithPipelineBatchSize(100);       // Batch size for pipeline
+```
+
+<Callout type="tip">
+**Performance Tuning**: Start with defaults, then adjust based on monitoring:
+- High CPU usage? Increase polling interval
+- High latency? Decrease polling interval
+- Low throughput? Increase batch size and concurrency
+</Callout>
+
+## Redis Deployment Options
+
+### Self-Hosted Redis
+
+**Single instance** (development):
+```bash
+redis-server --port 6379 --bind 127.0.0.1
+```
+
+**With persistence** (production):
+```bash
+redis-server \
+  --port 6379 \
+  --appendonly yes \                    # Enable AOF persistence
+  --appendfsync everysec \              # Fsync every second
+  --save 900 1 \                        # Save if 1 key changed in 15 min
+  --save 300 10 \                       # Save if 10 keys changed in 5 min
+  --save 60 10000                       # Save if 10k keys changed in 1 min
+```
+
+### Redis Sentinel (High Availability)
+
+For automatic failover:
+
+```csharp
+var transport = new RedisTransportConfiguration()
+    .WithConnectionString(
+        "sentinel1:26379,sentinel2:26379,sentinel3:26379," +
+        "serviceName=mymaster," +
+        "password=redis_password"
+    );
+```
+
+### Redis Cluster
+
+For horizontal scaling and sharding:
+
+```csharp
+var transport = new RedisTransportConfiguration()
+    .WithConnectionString(
+        "node1:6379,node2:6379,node3:6379,node4:6379,node5:6379,node6:6379"
+    );
+
+// Nimbus automatically distributes queues across cluster nodes
+```
+
+### Managed Redis Services
+
+**Azure Cache for Redis**:
+```csharp
+var transport = new RedisTransportConfiguration()
+    .WithConnectionString(
+        "your-cache.redis.cache.windows.net:6380," +
+        "password=your_access_key," +
+        "ssl=true," +
+        "abortConnect=false"
+    );
+```
+
+**AWS ElastiCache**:
+```csharp
+var transport = new RedisTransportConfiguration()
+    .WithConnectionString("your-cluster.cache.amazonaws.com:6379");
+```
+
+**Redis Cloud**:
+```csharp
+var transport = new RedisTransportConfiguration()
+    .WithConnectionString(
+        "redis-12345.c123.us-east-1-4.ec2.cloud.redislabs.com:12345," +
+        "password=your_password," +
+        "ssl=true"
+    );
+```
+
+## How Redis Transport Works
+
+### Queues (Commands & Requests)
+
+Redis Lists are used for queues:
+
+```
+LPUSH OrderService.PlaceOrderCommand "{...}"  // Producer pushes to left
+BRPOP OrderService.PlaceOrderCommand 1        // Consumer pops from right
+```
+
+**Benefits**:
+- FIFO ordering guaranteed
+- Blocking pop for efficient polling
+- Atomic operations
+- Simple and fast
+
+### Topics (Events)
+
+Redis Pub/Sub is used for events:
+
+```
+PUBLISH OrderService.OrderPlacedEvent "{...}"  // Publisher
+SUBSCRIBE OrderService.OrderPlacedEvent        // Subscribers
+```
+
+**Characteristics**:
+- Fire-and-forget delivery
+- No persistence (messages not stored)
+- Subscribers must be active to receive
+- Very low latency
+
+<Callout type="warning">
+**Pub/Sub Limitation**: Redis Pub/Sub doesn't persist messages. If no subscribers are active when a message is published, it's lost. For guaranteed delivery, use queues (commands) or consider Azure Service Bus for events.
+</Callout>
+
+### Message Format
+
+Messages are serialized as JSON strings:
+
+```json
+{
+  "MessageId": "guid",
+  "CorrelationId": "guid",
+  "Payload": {
+    "OrderId": "ORDER-123",
+    "Amount": 99.99
+  },
+  "Properties": {
+    "timestamp": "2025-01-23T10:30:00Z"
+  }
+}
+```
+
+## Data Persistence
+
+### Persistence Options
+
+**RDB (Redis Database Snapshots)**:
+```bash
+# redis.conf
+save 900 1      # Save if 1 key changes in 15 minutes
+save 300 10     # Save if 10 keys change in 5 minutes
+save 60 10000   # Save if 10k keys change in 1 minute
+```
+
+**AOF (Append-Only File)**:
+```bash
+# redis.conf
+appendonly yes
+appendfsync everysec  # Fsync every second (good balance)
+# appendfsync always  # Fsync every write (safest, slowest)
+# appendfsync no      # OS handles fsync (fastest, least safe)
+```
+
+**Hybrid** (recommended for production):
+```bash
+# Enable both RDB and AOF
+appendonly yes
+appendfsync everysec
+save 900 1
+save 300 10
+save 60 10000
+```
+
+### Message Expiration
+
+Set TTL on messages to prevent queue buildup:
+
+```csharp
+var transport = new RedisTransportConfiguration()
+    .WithConnectionString("localhost:6379")
+    .WithMessageTimeToLive(TimeSpan.FromHours(24));  // Expire after 24 hours
+
+// Or set per message
+await bus.Send(command, expiresAfter: DateTime.UtcNow.AddHours(1));
+```
+
+## Monitoring and Diagnostics
+
+### Redis INFO Command
+
+```bash
+redis-cli INFO
+
+# Key metrics:
+# - used_memory: Total memory used
+# - connected_clients: Number of connections
+# - instantaneous_ops_per_sec: Current ops/sec
+# - keyspace_misses: Cache misses
+```
+
+### Monitor Queue Depth
+
+```csharp
+using StackExchange.Redis;
+
+public class RedisQueueMonitor
+{
+    private readonly IConnectionMultiplexer _redis;
+
+    public async Task<Dictionary<string, long>> GetQueueDepths()
+    {
+        var db = _redis.GetDatabase();
+        var server = _redis.GetServer(_redis.GetEndPoints()[0]);
+
+        var queueDepths = new Dictionary<string, long>();
+
+        // Get all queue keys
+        var keys = server.Keys(pattern: "*Command*");
+
+        foreach (var key in keys)
+        {
+            var length = await db.ListLengthAsync(key);
+            queueDepths[key] = length;
+        }
+
+        return queueDepths;
+    }
+}
+```
+
+### Health Checks
+
+```csharp
+public class RedisHealthCheck : IHealthCheck
+{
+    private readonly IConnectionMultiplexer _redis;
+
+    public async Task<HealthCheckResult> CheckHealthAsync(
+        HealthCheckContext context,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var db = _redis.GetDatabase();
+
+            // Test connection with PING
+            var latency = await db.PingAsync();
+
+            if (latency.TotalMilliseconds > 100)
+            {
+                return HealthCheckResult.Degraded(
+                    $"Redis latency high: {latency.TotalMilliseconds}ms"
+                );
+            }
+
+            return HealthCheckResult.Healthy($"Redis latency: {latency.TotalMilliseconds}ms");
+        }
+        catch (Exception ex)
+        {
+            return HealthCheckResult.Unhealthy("Cannot connect to Redis", ex);
+        }
+    }
+}
+```
+
+### Performance Monitoring
+
+```csharp
+public class RedisPerformanceMonitor
+{
+    private readonly IConnectionMultiplexer _redis;
+
+    public async Task<RedisMetrics> GetMetrics()
+    {
+        var server = _redis.GetServer(_redis.GetEndPoints()[0]);
+        var info = await server.InfoAsync();
+
+        return new RedisMetrics
+        {
+            ConnectedClients = GetInfo(info, "connected_clients"),
+            UsedMemory = GetInfo(info, "used_memory_human"),
+            OpsPerSecond = GetInfo(info, "instantaneous_ops_per_sec"),
+            HitRate = CalculateHitRate(info)
+        };
+    }
+}
+```
+
+## Best Practices
+
+### 1. Use Persistence for Important Messages
+
+```bash
+# redis.conf - Production settings
+appendonly yes
+appendfsync everysec
+save 900 1
+```
+
+### 2. Set Appropriate Expiration
+
+```csharp
+var transport = new RedisTransportConfiguration()
+    .WithConnectionString("localhost:6379")
+    .WithMessageTimeToLive(TimeSpan.FromDays(1));  // Clean up old messages
+```
+
+### 3. Monitor Memory Usage
+
+```csharp
+// Set max memory and eviction policy
+# redis.conf
+maxmemory 2gb
+maxmemory-policy allkeys-lru  // Evict least recently used keys
+```
+
+### 4. Use Connection Pooling
+
+```csharp
+// ✅ GOOD: Single connection multiplexer (singleton)
+services.AddSingleton<IConnectionMultiplexer>(provider =>
+    ConnectionMultiplexer.Connect(connectionString)
+);
+
+// ❌ BAD: Creating connections per request
+services.AddScoped<IConnectionMultiplexer>(...);  // Don't do this!
+```
+
+### 5. Implement Idempotent Handlers
+
+Since Redis Pub/Sub doesn't guarantee exactly-once delivery:
+
+```csharp
+public class PlaceOrderHandler : IHandleCommand<PlaceOrderCommand>
+{
+    private readonly IDatabase _redis;
+    private readonly IOrderRepository _repository;
+
+    public async Task Handle(PlaceOrderCommand command)
+    {
+        var cacheKey = $"order:processed:{command.OrderId}";
+
+        // Check if already processed (idempotency)
+        if (await _redis.KeyExistsAsync(cacheKey))
+        {
+            return;  // Already handled
+        }
+
+        await _repository.CreateOrder(command);
+
+        // Mark as processed
+        await _redis.StringSetAsync(cacheKey, "1", TimeSpan.FromHours(24));
+    }
+}
+```
+
+### 6. Use Separate Databases for Isolation
+
+```csharp
+// Production
+var prodTransport = new RedisTransportConfiguration()
+    .WithConnectionString("redis.prod.com:6379")
+    .WithDatabase(0);
+
+// Staging
+var stagingTransport = new RedisTransportConfiguration()
+    .WithConnectionString("redis.staging.com:6379")
+    .WithDatabase(1);
+```
+
+## Common Issues
+
+### Issue: Messages not being received
+
+**Possible causes**:
+1. Subscriber not running when event published (Pub/Sub)
+2. Wrong database selected
+3. Network connectivity issues
+
+**Solution**:
+```csharp
+// For guaranteed delivery, use commands (queues) not events (pub/sub)
+await bus.Send(command);  // Uses queue (guaranteed)
+
+// Or ensure subscribers are always running
+// Or use Azure Service Bus for reliable pub/sub
+```
+
+### Issue: High memory usage
+
+**Cause**: Messages accumulating faster than processing
+
+**Solution**:
+```csharp
+// Set message expiration
+var transport = new RedisTransportConfiguration()
+    .WithConnectionString("localhost:6379")
+    .WithMessageTimeToLive(TimeSpan.FromHours(24));
+
+// Increase concurrent handlers
+.WithMaxConcurrentHandlers(50);
+
+// Set maxmemory policy in redis.conf
+maxmemory 4gb
+maxmemory-policy allkeys-lru
+```
+
+### Issue: Connection timeouts
+
+**Cause**: Redis overloaded or network issues
+
+**Solution**:
+```csharp
+var transport = new RedisTransportConfiguration()
+    .WithConnectionString(
+        "localhost:6379," +
+        "connectTimeout=10000," +     // Increase timeout
+        "syncTimeout=5000," +
+        "connectRetry=5," +
+        "abortConnect=false"          // Allow background reconnection
+    );
+```
+
+### Issue: Lost messages on Redis restart
+
+**Cause**: Persistence not configured
+
+**Solution**:
+```bash
+# Enable AOF persistence
+appendonly yes
+appendfsync everysec
+
+# Restart Redis
+redis-cli SHUTDOWN SAVE
+redis-server /path/to/redis.conf
+```
+
+## Performance Optimization
+
+### High-Throughput Configuration
+
+```csharp
+var transport = new RedisTransportConfiguration()
+    .WithConnectionString("localhost:6379")
+    .WithMaxConcurrentHandlers(100)         // High concurrency
+    .WithBatchSize(200)                     // Large batches
+    .WithPollingInterval(TimeSpan.FromMilliseconds(10))  // Aggressive polling
+    .WithConnectionPoolSize(20)             // More connections
+    .WithPipelinedMode(true);               // Enable pipelining
+```
+
+### Low-Latency Configuration
+
+```csharp
+var transport = new RedisTransportConfiguration()
+    .WithConnectionString("localhost:6379")
+    .WithPollingInterval(TimeSpan.FromMilliseconds(1))   // Ultra-fast polling
+    .WithBatchSize(10)                                    // Small batches
+    .WithMaxConcurrentHandlers(10);
+```
+
+### Balanced Configuration (Recommended)
+
+```csharp
+var transport = new RedisTransportConfiguration()
+    .WithConnectionString("localhost:6379")
+    .WithPollingInterval(TimeSpan.FromMilliseconds(100)) // 100ms polling
+    .WithBatchSize(50)                                    // Moderate batch
+    .WithMaxConcurrentHandlers(20)                       // Moderate concurrency
+    .WithMessageTimeToLive(TimeSpan.FromDays(1));        // Clean up old messages
+```
+
+## Redis vs Other Transports
+
+### Redis vs Azure Service Bus
+
+| Aspect | Redis | Azure Service Bus |
+|--------|-------|------------------|
+| **Latency** | Lower (1-10ms) | Higher (10-50ms) |
+| **Throughput** | Higher (10k+ msg/s) | Lower (1k msg/s standard) |
+| **Durability** | Good (with persistence) | Excellent |
+| **Cost** | Lower (self-host) | Higher (managed) |
+| **Setup** | Simple | Moderate |
+| **Features** | Basic | Advanced (sessions, DLQ, etc) |
+
+**Choose Redis when**: Speed and throughput are critical, you can manage infrastructure
+**Choose Azure Service Bus when**: Durability and enterprise features are critical
+
+### When to Migrate
+
+**From Redis to Azure Service Bus**:
+- Need better durability guarantees
+- Want managed infrastructure
+- Require advanced features (sessions, scheduled messages)
+- Growing beyond Redis capacity
+
+**From Azure Service Bus to Redis**:
+- Need higher throughput
+- Want to reduce costs
+- Have simpler messaging requirements
+- Running on-premises
+
+## Next Steps
+
+- Learn about [message patterns](/docs/architecture/message-patterns) with Redis
+- Implement [error handling](/docs/advanced/error-handling) strategies
+- Set up [monitoring and logging](/docs/guides/logging)
+- Explore [testing strategies](/docs/guides/testing) with Redis

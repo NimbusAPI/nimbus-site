@@ -1,0 +1,748 @@
+---
+title: "Dependency Injection"
+description: "How Nimbus integrates with dependency injection containers and manages handler lifetimes"
+category: "architecture"
+order: 5
+---
+
+import Callout from '@components/ui/Callout.astro';
+
+## Overview
+
+Nimbus is designed to work with any dependency injection (DI) container while remaining container-agnostic. It achieves this through its own abstraction layer that adapts to your chosen container.
+
+## The IDependencyResolver Interface
+
+Nimbus uses a simple abstraction for dependency resolution:
+
+```csharp
+public interface IDependencyResolver
+{
+    object Resolve(Type type);
+    TComponent Resolve<TComponent>();
+    IDependencyResolverScope CreateChildScope();
+}
+
+public interface IDependencyResolverScope : IDependencyResolver, IDisposable
+{
+}
+```
+
+This abstraction allows Nimbus to work with:
+- Autofac
+- Microsoft.Extensions.DependencyInjection
+- Castle Windsor
+- Unity
+- StructureMap
+- Any other container by implementing the adapter
+
+## Container Integration
+
+### Autofac (Recommended)
+
+Nimbus provides first-class Autofac support:
+
+```csharp
+var builder = new ContainerBuilder();
+
+// Register your services
+builder.RegisterType<OrderRepository>()
+    .As<IOrderRepository>()
+    .InstancePerLifetimeScope();
+
+builder.RegisterType<EmailService>()
+    .As<IEmailService>()
+    .InstancePerLifetimeScope();
+
+// Register handlers
+builder.RegisterType<PlaceOrderHandler>()
+    .As<IHandleCommand<PlaceOrderCommand>>()
+    .InstancePerLifetimeScope();
+
+var container = builder.Build();
+
+// Configure Nimbus with Autofac
+var bus = new BusBuilder()
+    .Configure()
+    .WithTransport(transport)
+    .WithNames("OrderService", Environment.MachineName)
+    .WithTypesFrom(typeProvider)
+    .WithAutofacDefaults(container)  // Autofac integration
+    .Build();
+
+await bus.Start();
+```
+
+The `WithAutofacDefaults` method:
+- Creates an Autofac dependency resolver adapter
+- Registers Nimbus components in the container
+- Configures handler lifetime scopes
+
+### Microsoft.Extensions.DependencyInjection
+
+For ASP.NET Core and modern .NET applications:
+
+```csharp
+public class Startup
+{
+    public void ConfigureServices(IServiceCollection services)
+    {
+        // Register your services
+        services.AddScoped<IOrderRepository, OrderRepository>();
+        services.AddScoped<IEmailService, EmailService>();
+
+        // Register handlers
+        services.AddScoped<IHandleCommand<PlaceOrderCommand>, PlaceOrderHandler>();
+
+        // Register Nimbus
+        services.AddSingleton<IBus>(provider =>
+        {
+            var bus = new BusBuilder()
+                .Configure()
+                .WithTransport(transport)
+                .WithNames("OrderService", Environment.MachineName)
+                .WithTypesFrom(typeProvider)
+                .WithDependencyResolver(new DotNetCoreServiceProviderAdapter(provider))
+                .Build();
+
+            bus.Start().Wait();
+            return bus;
+        });
+    }
+}
+
+// Adapter implementation
+public class DotNetCoreServiceProviderAdapter : IDependencyResolver
+{
+    private readonly IServiceProvider _serviceProvider;
+
+    public DotNetCoreServiceProviderAdapter(IServiceProvider serviceProvider)
+    {
+        _serviceProvider = serviceProvider;
+    }
+
+    public object Resolve(Type type)
+    {
+        return _serviceProvider.GetService(type);
+    }
+
+    public TComponent Resolve<TComponent>()
+    {
+        return _serviceProvider.GetService<TComponent>();
+    }
+
+    public IDependencyResolverScope CreateChildScope()
+    {
+        var scope = _serviceProvider.CreateScope();
+        return new DotNetCoreServiceProviderScope(scope);
+    }
+}
+
+public class DotNetCoreServiceProviderScope : IDependencyResolverScope
+{
+    private readonly IServiceScope _scope;
+
+    public DotNetCoreServiceProviderScope(IServiceScope scope)
+    {
+        _scope = scope;
+    }
+
+    public object Resolve(Type type) => _scope.ServiceProvider.GetService(type);
+    public TComponent Resolve<TComponent>() => _scope.ServiceProvider.GetService<TComponent>();
+    public IDependencyResolverScope CreateChildScope() => new DotNetCoreServiceProviderScope(_scope.ServiceProvider.CreateScope());
+    public void Dispose() => _scope.Dispose();
+}
+```
+
+### Other Containers
+
+Create an adapter for your container:
+
+```csharp
+// Example: Castle Windsor adapter
+public class WindsorDependencyResolver : IDependencyResolver
+{
+    private readonly IWindsorContainer _container;
+
+    public WindsorDependencyResolver(IWindsorContainer container)
+    {
+        _container = container;
+    }
+
+    public object Resolve(Type type)
+    {
+        return _container.Resolve(type);
+    }
+
+    public TComponent Resolve<TComponent>()
+    {
+        return _container.Resolve<TComponent>();
+    }
+
+    public IDependencyResolverScope CreateChildScope()
+    {
+        return new WindsorDependencyResolverScope(_container.BeginScope());
+    }
+}
+```
+
+## Handler Lifetime Management
+
+### Scope Per Message
+
+Nimbus creates a **child scope for each message** being processed:
+
+```
+Bus (Singleton)
+  │
+  ├─> Message 1 arrives
+  │     │
+  │     ├─> Create child scope
+  │     ├─> Resolve handler and dependencies
+  │     ├─> Execute handler
+  │     └─> Dispose scope
+  │
+  ├─> Message 2 arrives
+  │     │
+  │     ├─> Create child scope
+  │     ├─> Resolve handler and dependencies
+  │     ├─> Execute handler
+  │     └─> Dispose scope
+```
+
+This ensures:
+- Handlers don't share state between messages
+- Scoped dependencies are properly isolated
+- Resources are cleaned up after each message
+
+### Example
+
+```csharp
+public class PlaceOrderHandler : IHandleCommand<PlaceOrderCommand>
+{
+    private readonly IOrderRepository _repository;  // Scoped per message
+    private readonly IBus _bus;                     // Singleton
+    private readonly ILogger _logger;               // Singleton
+
+    public PlaceOrderHandler(
+        IOrderRepository repository,
+        IBus bus,
+        ILogger logger)
+    {
+        _repository = repository;
+        _bus = bus;
+        _logger = logger;
+    }
+
+    public async Task Handle(PlaceOrderCommand command)
+    {
+        // Each message gets its own repository instance
+        var order = await _repository.CreateOrder(command);
+
+        // But shares the same bus and logger
+        await _bus.Publish(new OrderPlacedEvent { OrderId = order.Id });
+        _logger.LogInformation("Order placed: {OrderId}", order.Id);
+    }
+}
+```
+
+## Service Lifetime Recommendations
+
+### Singleton Services
+
+These should be thread-safe and registered as singletons:
+
+```csharp
+// ✅ Singleton: IBus
+builder.RegisterInstance(bus).As<IBus>().SingleInstance();
+
+// ✅ Singleton: Configuration
+builder.RegisterInstance(config).As<IConfiguration>().SingleInstance();
+
+// ✅ Singleton: Stateless services
+builder.RegisterType<EncryptionService>()
+    .As<IEncryptionService>()
+    .SingleInstance();
+```
+
+### Scoped Services (Per Message)
+
+These are created per message and can maintain state during message processing:
+
+```csharp
+// ✅ Scoped: Repositories
+builder.RegisterType<OrderRepository>()
+    .As<IOrderRepository>()
+    .InstancePerLifetimeScope();
+
+// ✅ Scoped: Unit of Work
+builder.RegisterType<UnitOfWork>()
+    .As<IUnitOfWork>()
+    .InstancePerLifetimeScope();
+
+// ✅ Scoped: Handlers
+builder.RegisterType<PlaceOrderHandler>()
+    .As<IHandleCommand<PlaceOrderCommand>>()
+    .InstancePerLifetimeScope();
+
+// ✅ Scoped: DbContext
+builder.RegisterType<OrderDbContext>()
+    .InstancePerLifetimeScope();
+```
+
+### Transient Services
+
+Create new instances every time they're resolved:
+
+```csharp
+// ✅ Transient: Lightweight services
+builder.RegisterType<DateTimeProvider>()
+    .As<IDateTimeProvider>()
+    .InstancePerDependency();
+
+// ✅ Transient: Factory-created objects
+builder.RegisterType<OrderFactory>()
+    .As<IOrderFactory>()
+    .InstancePerDependency();
+```
+
+<Callout type="warning">
+**Avoid Captive Dependencies**: Don't inject scoped services into singleton services. The scoped service will become effectively singleton, causing state to be shared across messages.
+
+```csharp
+// ❌ BAD: Repository injected into singleton service
+public class OrderCache  // Singleton
+{
+    private readonly IOrderRepository _repository;  // Scoped - BUG!
+
+    public OrderCache(IOrderRepository repository)
+    {
+        _repository = repository;  // Will use first resolved instance forever
+    }
+}
+
+// ✅ GOOD: Inject factory or use service locator pattern
+public class OrderCache  // Singleton
+{
+    private readonly IDependencyResolver _resolver;
+
+    public OrderCache(IDependencyResolver resolver)
+    {
+        _resolver = resolver;
+    }
+
+    public async Task<Order> GetOrder(string id)
+    {
+        using (var scope = _resolver.CreateChildScope())
+        {
+            var repository = scope.Resolve<IOrderRepository>();
+            return await repository.GetById(id);
+        }
+    }
+}
+```
+</Callout>
+
+## Handler Registration Patterns
+
+### Manual Registration
+
+Register handlers explicitly:
+
+```csharp
+builder.RegisterType<PlaceOrderHandler>()
+    .As<IHandleCommand<PlaceOrderCommand>>()
+    .InstancePerLifetimeScope();
+
+builder.RegisterType<OrderPlacedHandler>()
+    .As<IHandleCompetingEvent<OrderPlacedEvent>>()
+    .InstancePerLifetimeScope();
+
+builder.RegisterType<GetOrderHandler>()
+    .As<IHandleRequest<GetOrderRequest, OrderDto>>()
+    .InstancePerLifetimeScope();
+```
+
+### Assembly Scanning
+
+Register all handlers from assemblies:
+
+```csharp
+// Autofac assembly scanning
+builder.RegisterAssemblyTypes(typeof(PlaceOrderHandler).Assembly)
+    .AsClosedTypesOf(typeof(IHandleCommand<>))
+    .InstancePerLifetimeScope();
+
+builder.RegisterAssemblyTypes(typeof(OrderPlacedHandler).Assembly)
+    .AsClosedTypesOf(typeof(IHandleCompetingEvent<>))
+    .InstancePerLifetimeScope();
+
+builder.RegisterAssemblyTypes(typeof(GetOrderHandler).Assembly)
+    .AsClosedTypesOf(typeof(IHandleRequest<,>))
+    .InstancePerLifetimeScope();
+```
+
+### Convention-Based Registration
+
+Use naming conventions:
+
+```csharp
+public static void RegisterHandlers(ContainerBuilder builder, params Assembly[] assemblies)
+{
+    foreach (var assembly in assemblies)
+    {
+        builder.RegisterAssemblyTypes(assembly)
+            .Where(t => t.Name.EndsWith("Handler"))
+            .AsImplementedInterfaces()
+            .InstancePerLifetimeScope();
+    }
+}
+
+// Usage
+RegisterHandlers(builder, typeof(PlaceOrderHandler).Assembly);
+```
+
+## Dependency Resolution Flow
+
+### 1. Bus Start
+
+```csharp
+await bus.Start();
+
+// Internally:
+// 1. Resolve message receivers
+// 2. Resolve routers, serializers
+// 3. Start message pumps
+// 4. Begin listening for messages
+```
+
+### 2. Message Arrives
+
+```
+┌─────────────────────────────────────┐
+│ Message arrives at queue/topic      │
+└─────────────┬───────────────────────┘
+              │
+┌─────────────▼───────────────────────┐
+│ Message pump raises MessageReceived │
+└─────────────┬───────────────────────┘
+              │
+┌─────────────▼───────────────────────┐
+│ Create child scope                  │
+│ scope = resolver.CreateChildScope() │
+└─────────────┬───────────────────────┘
+              │
+┌─────────────▼───────────────────────┐
+│ Resolve handler from scope          │
+│ handler = scope.Resolve<IHandle...> │
+└─────────────┬───────────────────────┘
+              │
+┌─────────────▼───────────────────────┐
+│ Execute handler                     │
+│ await handler.Handle(message)       │
+└─────────────┬───────────────────────┘
+              │
+┌─────────────▼───────────────────────┐
+│ Dispose scope                       │
+│ scope.Dispose()                     │
+└─────────────────────────────────────┘
+```
+
+### 3. Handler Execution
+
+```csharp
+// Nimbus internal code (simplified)
+public async Task ProcessMessage(NimbusMessage message)
+{
+    using (var scope = _dependencyResolver.CreateChildScope())
+    {
+        // Resolve handler with all its dependencies
+        var handlerType = typeof(IHandleCommand<>).MakeGenericType(message.Payload.GetType());
+        var handler = scope.Resolve(handlerType);
+
+        // Execute
+        await ((dynamic)handler).Handle((dynamic)message.Payload);
+
+        // Scope disposes, cleaning up all scoped dependencies
+    }
+}
+```
+
+## Advanced DI Scenarios
+
+### Constructor Injection
+
+Standard pattern for injecting dependencies:
+
+```csharp
+public class PlaceOrderHandler : IHandleCommand<PlaceOrderCommand>
+{
+    private readonly IOrderRepository _repository;
+    private readonly IEmailService _emailService;
+    private readonly IBus _bus;
+    private readonly ILogger<PlaceOrderHandler> _logger;
+
+    public PlaceOrderHandler(
+        IOrderRepository repository,
+        IEmailService emailService,
+        IBus bus,
+        ILogger<PlaceOrderHandler> logger)
+    {
+        _repository = repository;
+        _emailService = emailService;
+        _bus = bus;
+        _logger = logger;
+    }
+
+    public async Task Handle(PlaceOrderCommand command)
+    {
+        _logger.LogInformation("Placing order {OrderId}", command.OrderId);
+
+        var order = await _repository.CreateOrder(command);
+        await _emailService.SendConfirmation(order);
+        await _bus.Publish(new OrderPlacedEvent { OrderId = order.Id });
+    }
+}
+```
+
+### Property Injection
+
+Some containers support property injection:
+
+```csharp
+public class PlaceOrderHandler : IHandleCommand<PlaceOrderCommand>
+{
+    // Autofac property injection
+    public ILogger Logger { get; set; }
+
+    private readonly IOrderRepository _repository;
+
+    public PlaceOrderHandler(IOrderRepository repository)
+    {
+        _repository = repository;
+    }
+
+    public async Task Handle(PlaceOrderCommand command)
+    {
+        Logger?.LogInformation("Handling command");
+        await _repository.CreateOrder(command);
+    }
+}
+
+// Registration
+builder.RegisterType<PlaceOrderHandler>()
+    .As<IHandleCommand<PlaceOrderCommand>>()
+    .PropertiesAutowired()  // Enable property injection
+    .InstancePerLifetimeScope();
+```
+
+### Factory Pattern
+
+Use factories when you need control over object creation:
+
+```csharp
+public interface IOrderFactory
+{
+    Order CreateOrder(PlaceOrderCommand command);
+}
+
+public class PlaceOrderHandler : IHandleCommand<PlaceOrderCommand>
+{
+    private readonly IOrderRepository _repository;
+    private readonly IOrderFactory _orderFactory;
+
+    public PlaceOrderHandler(
+        IOrderRepository repository,
+        IOrderFactory orderFactory)
+    {
+        _repository = repository;
+        _orderFactory = orderFactory;
+    }
+
+    public async Task Handle(PlaceOrderCommand command)
+    {
+        var order = _orderFactory.CreateOrder(command);
+        await _repository.Save(order);
+    }
+}
+```
+
+### Lazy Dependencies
+
+Delay resolution until needed:
+
+```csharp
+public class PlaceOrderHandler : IHandleCommand<PlaceOrderCommand>
+{
+    private readonly IOrderRepository _repository;
+    private readonly Lazy<IEmailService> _emailService;
+
+    public PlaceOrderHandler(
+        IOrderRepository repository,
+        Lazy<IEmailService> emailService)
+    {
+        _repository = repository;
+        _emailService = emailService;
+    }
+
+    public async Task Handle(PlaceOrderCommand command)
+    {
+        var order = await _repository.CreateOrder(command);
+
+        if (command.SendConfirmation)
+        {
+            // Email service only resolved if needed
+            await _emailService.Value.SendConfirmation(order);
+        }
+    }
+}
+```
+
+## Testing with DI
+
+### Unit Testing
+
+Mock dependencies in unit tests:
+
+```csharp
+[Test]
+public async Task PlaceOrderHandler_Should_CreateOrder()
+{
+    // Arrange
+    var mockRepository = new Mock<IOrderRepository>();
+    var mockBus = new Mock<IBus>();
+    var handler = new PlaceOrderHandler(mockRepository.Object, mockBus.Object);
+
+    var command = new PlaceOrderCommand { OrderId = "123" };
+
+    // Act
+    await handler.Handle(command);
+
+    // Assert
+    mockRepository.Verify(r => r.CreateOrder(command), Times.Once);
+}
+```
+
+### Integration Testing
+
+Use real container with test doubles:
+
+```csharp
+[Test]
+public async Task Integration_Test_With_InMemoryRepository()
+{
+    // Arrange
+    var builder = new ContainerBuilder();
+
+    // Register test implementations
+    builder.RegisterType<InMemoryOrderRepository>()
+        .As<IOrderRepository>()
+        .InstancePerLifetimeScope();
+
+    // Register handlers
+    builder.RegisterType<PlaceOrderHandler>()
+        .As<IHandleCommand<PlaceOrderCommand>>()
+        .InstancePerLifetimeScope();
+
+    // Register Nimbus with in-process transport
+    var transport = new InProcessTransportConfiguration();
+    var bus = new BusBuilder()
+        .Configure()
+        .WithTransport(transport)
+        .WithAutofacDefaults(builder.Build())
+        .Build();
+
+    await bus.Start();
+
+    // Act
+    await bus.Send(new PlaceOrderCommand { OrderId = "123" });
+
+    // Assert
+    // ... verify message was processed
+}
+```
+
+## Common Patterns
+
+### Unit of Work Pattern
+
+```csharp
+public interface IUnitOfWork : IDisposable
+{
+    Task CommitAsync();
+    Task RollbackAsync();
+}
+
+public class PlaceOrderHandler : IHandleCommand<PlaceOrderCommand>
+{
+    private readonly IOrderRepository _repository;
+    private readonly IUnitOfWork _unitOfWork;
+
+    public async Task Handle(PlaceOrderCommand command)
+    {
+        try
+        {
+            await _repository.CreateOrder(command);
+            await _unitOfWork.CommitAsync();
+        }
+        catch
+        {
+            await _unitOfWork.RollbackAsync();
+            throw;
+        }
+    }
+}
+
+// UnitOfWork is scoped per message
+builder.RegisterType<UnitOfWork>()
+    .As<IUnitOfWork>()
+    .InstancePerLifetimeScope();
+```
+
+### Decorator Pattern
+
+Add cross-cutting concerns:
+
+```csharp
+public class LoggingOrderRepository : IOrderRepository
+{
+    private readonly IOrderRepository _inner;
+    private readonly ILogger _logger;
+
+    public LoggingOrderRepository(IOrderRepository inner, ILogger logger)
+    {
+        _inner = inner;
+        _logger = logger;
+    }
+
+    public async Task<Order> CreateOrder(PlaceOrderCommand command)
+    {
+        _logger.LogInformation("Creating order {OrderId}", command.OrderId);
+        var result = await _inner.CreateOrder(command);
+        _logger.LogInformation("Order created successfully");
+        return result;
+    }
+}
+
+// Registration
+builder.RegisterType<OrderRepository>().Named<IOrderRepository>("base");
+builder.RegisterDecorator<IOrderRepository>(
+    (c, inner) => new LoggingOrderRepository(inner, c.Resolve<ILogger>()),
+    "base"
+);
+```
+
+## Best Practices
+
+1. **Keep handlers thin** - Handlers should orchestrate, not implement business logic
+2. **Use scoped lifetimes** - Handlers and their dependencies should be scoped per message
+3. **Avoid singletons with state** - Stateful singletons cause threading issues
+4. **Test with real container** - Integration tests should use the actual DI configuration
+5. **Register handlers by interface** - Don't resolve concrete handler types
+6. **Dispose resources properly** - Use scopes and implement IDisposable when needed
+
+## Next Steps
+
+- **[Interceptors](/docs/advanced/interceptors)** - Add cross-cutting concerns to message handling
+- **[Autofac Integration Guide](/docs/guides/autofac-integration)** - Detailed Autofac setup
+- **[Testing Guide](/docs/guides/testing)** - Testing strategies with DI

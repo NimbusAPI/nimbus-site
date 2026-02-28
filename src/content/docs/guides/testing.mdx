@@ -1,0 +1,370 @@
+---
+title: "Testing"
+description: "Test Nimbus handlers and message flows using the InProcess transport"
+category: "guides"
+order: 3
+---
+
+import Callout from '@components/ui/Callout.astro';
+
+## Overview
+
+Nimbus's [InProcess transport](/docs/transports/in-process) is designed for testing. It runs entirely in-memory with no external dependencies, making tests fast and deterministic. Because it implements the same `INimbusTransport` interface as production transports, your handler logic is exercised identically.
+
+## Setup
+
+```bash
+dotnet add package Nimbus
+dotnet add package Nimbus.Containers.Autofac
+```
+
+The InProcess transport is included in the core `Nimbus` package — no extra package required.
+
+## A Basic Handler Test
+
+Here's the pattern for a complete handler integration test:
+
+```csharp
+using Autofac;
+using Nimbus;
+using Nimbus.Configuration;
+using Nimbus.Infrastructure;
+using NUnit.Framework;
+
+[TestFixture]
+public class PlaceOrderHandlerTests
+{
+    private IBus _bus;
+    private IContainer _container;
+    private InMemoryOrderRepository _repository;
+
+    [SetUp]
+    public async Task SetUp()
+    {
+        _repository = new InMemoryOrderRepository();
+
+        var typeProvider = new AssemblyScanningTypeProvider(
+            typeof(PlaceOrderCommand).Assembly,
+            typeof(PlaceOrderHandler).Assembly
+        );
+
+        var builder = new ContainerBuilder();
+        builder.RegisterNimbus(typeProvider);
+        builder.RegisterInstance(_repository).As<IOrderRepository>();
+
+        _container = builder.Build();
+
+        _bus = new BusBuilder()
+            .Configure()
+            .WithTransport(new InProcessTransportConfiguration())
+            .WithNames("TestApp", Guid.NewGuid().ToString()) // unique per test run
+            .WithAutofacDefaults(_container)
+            .Build();
+
+        await _bus.Start();
+    }
+
+    [TearDown]
+    public async Task TearDown()
+    {
+        await _bus.Stop();
+        _bus.Dispose();
+        _container.Dispose();
+    }
+
+    [Test]
+    public async Task PlaceOrder_Should_SaveOrderToRepository()
+    {
+        await _bus.Send(new PlaceOrderCommand
+        {
+            OrderId = "ORDER-001",
+            CustomerId = "CUST-123",
+            TotalAmount = 99.99m
+        });
+
+        // Give the async handler time to run
+        await Task.Delay(100);
+
+        var order = await _repository.GetById("ORDER-001");
+        Assert.That(order, Is.Not.Null);
+        Assert.That(order.CustomerId, Is.EqualTo("CUST-123"));
+    }
+}
+```
+
+<Callout type="tip">
+Use `Guid.NewGuid().ToString()` for the instance name to keep test runs isolated from each other, especially when running tests in parallel.
+</Callout>
+
+## Testing the Full Message Chain
+
+Test that a command triggers subsequent events and side effects:
+
+```csharp
+[Test]
+public async Task PlaceOrder_Should_PublishOrderPlacedEvent()
+{
+    var publishedEvents = new List<OrderPlacedEvent>();
+
+    // Register a spy handler for the event
+    var builder = new ContainerBuilder();
+    builder.RegisterNimbus(typeProvider);
+    builder.RegisterInstance(_repository).As<IOrderRepository>();
+
+    // Spy handler captures published events
+    builder.Register(_ => new SpyEventHandler<OrderPlacedEvent>(publishedEvents))
+        .As<IHandleCompetingEvent<OrderPlacedEvent>>();
+
+    var container = builder.Build();
+    var bus = CreateBus(container);
+    await bus.Start();
+
+    // Act
+    await bus.Send(new PlaceOrderCommand { OrderId = "ORDER-001" });
+
+    // Wait for both the command handler and event handler to run
+    await Task.Delay(200);
+
+    // Assert
+    Assert.That(publishedEvents, Has.Count.EqualTo(1));
+    Assert.That(publishedEvents[0].OrderId, Is.EqualTo("ORDER-001"));
+}
+
+// Simple spy handler
+public class SpyEventHandler<TEvent> : IHandleCompetingEvent<TEvent>
+    where TEvent : IBusEvent
+{
+    private readonly List<TEvent> _captured;
+
+    public SpyEventHandler(List<TEvent> captured) => _captured = captured;
+
+    public Task Handle(TEvent @event)
+    {
+        _captured.Add(@event);
+        return Task.CompletedTask;
+    }
+}
+```
+
+## Testing Request/Response
+
+```csharp
+[Test]
+public async Task GetOrder_Should_ReturnOrderDetails()
+{
+    // Seed data
+    await _repository.Save(new Order
+    {
+        Id = "ORDER-123",
+        CustomerId = "CUST-456",
+        Status = OrderStatus.Pending,
+        TotalAmount = 150m
+    });
+
+    // Act
+    var response = await _bus.Request<GetOrderRequest, OrderDto>(
+        new GetOrderRequest { OrderId = "ORDER-123" }
+    );
+
+    // Assert
+    Assert.That(response, Is.Not.Null);
+    Assert.That(response.OrderId, Is.EqualTo("ORDER-123"));
+    Assert.That(response.Status, Is.EqualTo(OrderStatus.Pending));
+}
+```
+
+## Testing with Mocks
+
+For unit-style tests where you want to mock dependencies, inject mocks via the container:
+
+```csharp
+[Test]
+public async Task PlaceOrder_Should_SendConfirmationEmail()
+{
+    var mockEmailService = new Mock<IEmailService>();
+
+    var builder = new ContainerBuilder();
+    builder.RegisterNimbus(typeProvider);
+    builder.RegisterInstance(mockEmailService.Object).As<IEmailService>();
+    builder.RegisterInstance(_repository).As<IOrderRepository>();
+
+    var container = builder.Build();
+    var bus = CreateBus(container);
+    await bus.Start();
+
+    await bus.Send(new PlaceOrderCommand { OrderId = "ORDER-001", CustomerId = "CUST-123" });
+    await Task.Delay(100);
+
+    mockEmailService.Verify(
+        s => s.SendConfirmation("CUST-123", "ORDER-001"),
+        Times.Once);
+}
+```
+
+## Avoiding Timing Issues
+
+The InProcess transport delivers messages asynchronously. Use one of these approaches to handle timing in tests:
+
+### Fixed Delay (Simple)
+
+```csharp
+await bus.Send(command);
+await Task.Delay(100); // Simple but brittle if the handler is slow
+```
+
+### Polling with Timeout (Reliable)
+
+```csharp
+await bus.Send(command);
+
+// Poll until condition is met or timeout
+var deadline = DateTime.UtcNow.AddSeconds(5);
+while (DateTime.UtcNow < deadline)
+{
+    var order = await _repository.GetById(command.OrderId);
+    if (order != null) break;
+    await Task.Delay(10);
+}
+
+var result = await _repository.GetById(command.OrderId);
+Assert.That(result, Is.Not.Null);
+```
+
+### TaskCompletionSource (Precise)
+
+```csharp
+var tcs = new TaskCompletionSource<bool>();
+
+builder.Register(_ => new SignallingHandler(tcs))
+    .As<IHandleCompetingEvent<OrderPlacedEvent>>();
+
+await bus.Send(command);
+
+// Wait for the event handler to signal completion
+await Task.WhenAny(tcs.Task, Task.Delay(5000));
+Assert.That(tcs.Task.IsCompleted, Is.True, "Handler did not complete in time");
+```
+
+## Testing Error Handling
+
+Test that your handler is idempotent or handles failures correctly:
+
+```csharp
+[Test]
+public async Task PlaceOrder_Should_BeIdempotent()
+{
+    var command = new PlaceOrderCommand { OrderId = "ORDER-001" };
+
+    // Send the same command twice (simulating a retry)
+    await bus.Send(command);
+    await bus.Send(command);
+    await Task.Delay(200);
+
+    // Only one order should exist
+    var orders = await _repository.GetAllByOrderId("ORDER-001");
+    Assert.That(orders, Has.Count.EqualTo(1));
+}
+
+[Test]
+public async Task PlaceOrder_Should_NotSendEmail_WhenRepositoryFails()
+{
+    var mockRepo = new Mock<IOrderRepository>();
+    mockRepo.Setup(r => r.Save(It.IsAny<PlaceOrderCommand>()))
+        .ThrowsAsync(new Exception("DB unavailable"));
+
+    // ... set up bus with mock repo
+
+    await bus.Send(new PlaceOrderCommand { OrderId = "ORDER-001" });
+    await Task.Delay(100);
+
+    mockEmailService.Verify(
+        s => s.SendConfirmation(It.IsAny<string>(), It.IsAny<string>()),
+        Times.Never);
+}
+```
+
+## Shared Test Infrastructure
+
+Extract bus setup into a base class to reduce boilerplate:
+
+```csharp
+public abstract class NimbusIntegrationTest
+{
+    protected IBus Bus { get; private set; }
+    private IContainer _container;
+
+    [SetUp]
+    public async Task BaseSetUp()
+    {
+        var typeProvider = new AssemblyScanningTypeProvider(
+            GetType().Assembly,
+            typeof(PlaceOrderHandler).Assembly
+        );
+
+        var builder = new ContainerBuilder();
+        builder.RegisterNimbus(typeProvider);
+        RegisterServices(builder);
+
+        _container = builder.Build();
+
+        Bus = new BusBuilder()
+            .Configure()
+            .WithTransport(new InProcessTransportConfiguration())
+            .WithNames("TestApp", Guid.NewGuid().ToString())
+            .WithAutofacDefaults(_container)
+            .Build();
+
+        await Bus.Start();
+    }
+
+    // Override in derived classes to register test-specific services
+    protected virtual void RegisterServices(ContainerBuilder builder) { }
+
+    [TearDown]
+    public async Task BaseTearDown()
+    {
+        await Bus.Stop();
+        Bus.Dispose();
+        _container.Dispose();
+    }
+}
+
+// Usage
+[TestFixture]
+public class OrderHandlerTests : NimbusIntegrationTest
+{
+    private InMemoryOrderRepository _repository;
+
+    protected override void RegisterServices(ContainerBuilder builder)
+    {
+        _repository = new InMemoryOrderRepository();
+        builder.RegisterInstance(_repository).As<IOrderRepository>();
+    }
+
+    [Test]
+    public async Task Should_CreateOrder()
+    {
+        await Bus.Send(new PlaceOrderCommand { OrderId = "ORDER-001" });
+        await Task.Delay(100);
+
+        var order = await _repository.GetById("ORDER-001");
+        Assert.That(order, Is.Not.Null);
+    }
+}
+```
+
+## What to Test
+
+| Test Type | What to Use | What to Test |
+|-----------|------------|--------------|
+| **Handler logic** | Direct instantiation + mocks | Business rules, edge cases, error paths |
+| **Message chain** | Full bus with InProcess | Command → event → downstream handler |
+| **Request/response** | Full bus with InProcess | Response shape, null handling, timeouts |
+| **Idempotency** | Full bus with InProcess | Duplicate message handling |
+| **Integration** | Real transport (separate test suite) | Transport-specific behaviour, production smoke tests |
+
+## Next Steps
+
+- [InProcess Transport](/docs/transports/in-process) — detailed InProcess configuration options
+- [Error Handling](/docs/advanced/error-handling) — testing error scenarios
+- [Autofac Integration](/docs/guides/autofac-integration) — DI setup for tests

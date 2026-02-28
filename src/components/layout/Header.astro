@@ -1,0 +1,35 @@
+---
+import { Image } from 'astro:assets';
+import logo from '../../assets/logo.png';
+---
+
+<header class="sticky top-0 z-50 border-b border-gray-200 bg-white/80 backdrop-blur-sm">
+  <div class="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8">
+    <div class="flex items-center justify-between h-16">
+      <!-- Logo -->
+      <div class="flex items-center">
+        <a href="/" class="flex items-center">
+          <Image
+            src={logo}
+            alt="NimbusAPI"
+            height={36}
+            class="h-9 w-auto"
+          />
+        </a>
+      </div>
+
+      <!-- Navigation -->
+      <nav class="hidden md:flex items-center gap-6">
+        <a href="/docs/getting-started" class="text-sm font-medium text-gray-700 hover:text-blue-600 transition-colors">
+          Docs
+        </a>
+        <a href="/blog" class="text-sm font-medium text-gray-700 hover:text-blue-600 transition-colors">
+          Blog
+        </a>
+        <a href="https://github.com/NimbusAPI/Nimbus" target="_blank" rel="noopener noreferrer" class="text-sm font-medium text-gray-700 hover:text-blue-600 transition-colors">
+          GitHub
+        </a>
+      </nav>
+    </div>
+  </div>
+</header>

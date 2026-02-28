@@ -1,0 +1,296 @@
+---
+title: "Logging"
+description: "Configure logging for Nimbus using Serilog or Log4net"
+category: "guides"
+order: 2
+---
+
+import Callout from '@components/ui/Callout.astro';
+
+## Overview
+
+Nimbus emits structured log messages throughout message processing — handler execution, send/receive operations, errors, and lifecycle events. You can route these to any logging framework via the provided adapters.
+
+**Available packages:**
+- `Nimbus.Logger.Serilog` — Serilog integration
+- `Nimbus.Logger.Log4net` — Log4net integration
+
+## Serilog
+
+### Install
+
+```bash
+dotnet add package Nimbus.Logger.Serilog
+dotnet add package Serilog
+dotnet add package Serilog.Sinks.Console
+```
+
+### Configure with an Explicit Logger
+
+Pass a Serilog `ILogger` instance to the bus:
+
+```csharp
+using Nimbus.Logger.Serilog.Configuration;
+using Serilog;
+
+// Create the Serilog logger
+var logger = new LoggerConfiguration()
+    .MinimumLevel.Debug()
+    .WriteTo.Console(outputTemplate:
+        "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj} {Properties}{NewLine}{Exception}")
+    .Enrich.FromLogContext()
+    .CreateLogger();
+
+// Pass it to Nimbus
+var bus = new BusBuilder()
+    .Configure()
+    .WithTransport(transport)
+    .WithNames("OrderService", Environment.MachineName)
+    .WithTypesFrom(typeProvider)
+    .WithAutofacDefaults(container)
+    .WithSerilogLogger(logger)   // ← explicit logger instance
+    .Build();
+```
+
+### Configure with the Static Logger
+
+If you've configured the Serilog static `Log` class, use the parameterless overload:
+
+```csharp
+// Configure the static logger
+Log.Logger = new LoggerConfiguration()
+    .MinimumLevel.Information()
+    .WriteTo.Console()
+    .CreateLogger();
+
+var bus = new BusBuilder()
+    .Configure()
+    .WithSerilogLogger()   // ← uses Log.Logger
+    .Build();
+```
+
+### Recommended Serilog Setup for Production
+
+```csharp
+Log.Logger = new LoggerConfiguration()
+    .MinimumLevel.Information()
+    .MinimumLevel.Override("Nimbus", LogEventLevel.Warning) // reduce Nimbus noise
+    .WriteTo.Console(new JsonFormatter())                   // structured JSON output
+    .WriteTo.Seq("http://localhost:5341")                   // centralized log server
+    .Enrich.FromLogContext()
+    .Enrich.WithMachineName()
+    .Enrich.WithProperty("Application", "OrderService")
+    .CreateLogger();
+```
+
+<Callout type="tip">
+Use `MinimumLevel.Override("Nimbus", LogEventLevel.Warning)` in production to suppress verbose Nimbus debug/info messages while keeping your application logs at a lower level.
+</Callout>
+
+### Structured Logging in Handlers
+
+Since Serilog is configured globally, you can use it directly in handlers too:
+
+```csharp
+using Serilog;
+
+public class PlaceOrderHandler : IHandleCommand<PlaceOrderCommand>
+{
+    private readonly IOrderRepository _repository;
+
+    public PlaceOrderHandler(IOrderRepository repository)
+    {
+        _repository = repository;
+    }
+
+    public async Task Handle(PlaceOrderCommand command)
+    {
+        Log.Information("Placing order {OrderId} for customer {CustomerId}",
+            command.OrderId, command.CustomerId);
+
+        var order = await _repository.Save(command);
+
+        Log.Information("Order {OrderId} placed successfully", order.Id);
+    }
+}
+```
+
+Or inject `ILogger` via Autofac:
+
+```csharp
+public class PlaceOrderHandler : IHandleCommand<PlaceOrderCommand>
+{
+    private readonly IOrderRepository _repository;
+    private readonly ILogger _logger;
+
+    public PlaceOrderHandler(IOrderRepository repository, ILogger logger)
+    {
+        _repository = repository;
+        _logger = logger.ForContext<PlaceOrderHandler>();
+    }
+
+    public async Task Handle(PlaceOrderCommand command)
+    {
+        _logger.Information("Placing order {OrderId}", command.OrderId);
+        // ...
+    }
+}
+```
+
+## Log4net
+
+### Install
+
+```bash
+dotnet add package Nimbus.Logger.Log4net
+dotnet add package log4net
+```
+
+### Configure
+
+```csharp
+using Nimbus.Logger.Log4net.Configuration;
+
+var bus = new BusBuilder()
+    .Configure()
+    .WithTransport(transport)
+    .WithNames("OrderService", Environment.MachineName)
+    .WithTypesFrom(typeProvider)
+    .WithAutofacDefaults(container)
+    .WithLog4netLogger()   // ← uses log4net configuration
+    .Build();
+```
+
+Configure log4net via `log4net.config`:
+
+```xml
+<?xml version="1.0" encoding="utf-8" ?>
+<log4net>
+  <appender name="ConsoleAppender" type="log4net.Appender.ConsoleAppender">
+    <layout type="log4net.Layout.PatternLayout">
+      <conversionPattern value="%date [%thread] %-5level %logger - %message%newline" />
+    </layout>
+  </appender>
+
+  <root>
+    <level value="INFO" />
+    <appender-ref ref="ConsoleAppender" />
+  </root>
+
+  <!-- Reduce Nimbus verbosity in production -->
+  <logger name="Nimbus">
+    <level value="WARN" />
+  </logger>
+</log4net>
+```
+
+Load the configuration at startup:
+
+```csharp
+using log4net;
+using log4net.Config;
+using System.Reflection;
+
+var logRepository = LogManager.GetRepository(Assembly.GetEntryAssembly());
+XmlConfigurator.Configure(logRepository, new FileInfo("log4net.config"));
+```
+
+## Using Logging in Interceptors
+
+The most powerful approach is to handle all Nimbus message logging centrally in an [inbound interceptor](/docs/advanced/interceptors):
+
+```csharp
+public class LoggingInterceptor : IInboundInterceptor
+{
+    private readonly ILogger _logger;
+
+    public int Priority => 0;
+
+    public LoggingInterceptor(ILogger logger)
+    {
+        _logger = logger;
+    }
+
+    public async Task OnCommandHandlerExecuting<TCommand>(
+        TCommand command, NimbusMessage message)
+        where TCommand : IBusCommand
+    {
+        _logger.Information(
+            "→ {CommandType} [{MessageId}] (attempt {Attempt})",
+            typeof(TCommand).Name,
+            message.MessageId,
+            message.DeliveryCount);
+    }
+
+    public async Task OnCommandHandlerSuccess<TCommand>(
+        TCommand command, NimbusMessage message)
+        where TCommand : IBusCommand
+    {
+        _logger.Information(
+            "✓ {CommandType} [{MessageId}]",
+            typeof(TCommand).Name,
+            message.MessageId);
+    }
+
+    public async Task OnCommandHandlerError<TCommand>(
+        TCommand command, NimbusMessage message, Exception exception)
+        where TCommand : IBusCommand
+    {
+        _logger.Error(exception,
+            "✗ {CommandType} [{MessageId}]",
+            typeof(TCommand).Name,
+            message.MessageId);
+    }
+
+    // Similar methods for events, requests...
+}
+```
+
+Register it on the bus:
+
+```csharp
+.WithGlobalInboundInterceptorTypes(typeof(LoggingInterceptor))
+```
+
+## Distributed Tracing with Correlation IDs
+
+The `NimbusMessage` envelope includes a `CorrelationId` that follows a message chain across services. Use it to correlate log entries:
+
+```csharp
+public async Task OnCommandHandlerExecuting<TCommand>(
+    TCommand command, NimbusMessage message)
+    where TCommand : IBusCommand
+{
+    // Push correlation ID into Serilog's log context
+    // so it appears on all log entries during this handler's execution
+    using (LogContext.PushProperty("CorrelationId", message.CorrelationId))
+    using (LogContext.PushProperty("MessageId", message.MessageId))
+    {
+        // The context flows through async continuations automatically
+    }
+}
+```
+
+## Seq for Development
+
+[Seq](https://datalust.co/seq) provides a great local development experience for structured logs:
+
+```bash
+docker run -d --name seq -p 5341:80 datalust/seq:latest
+```
+
+```csharp
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.Console()
+    .WriteTo.Seq("http://localhost:5341")
+    .Enrich.FromLogContext()
+    .CreateLogger();
+```
+
+Open `http://localhost:5341` to search and filter logs by correlation ID, message type, or any other property.
+
+## Next Steps
+
+- [Interceptors](/docs/advanced/interceptors) — centralise logging with inbound interceptors
+- [Autofac Integration](/docs/guides/autofac-integration) — inject loggers into handlers via DI
+- [Error Handling](/docs/advanced/error-handling) — logging error and retry scenarios

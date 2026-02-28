@@ -1,0 +1,180 @@
+---
+title: "Large Messages"
+description: "Handle messages that exceed transport size limits by offloading payloads to Azure Blob Storage"
+category: "advanced"
+order: 3
+---
+
+import Callout from '@components/ui/Callout.astro';
+
+## The Problem
+
+Every messaging transport enforces a maximum message size:
+
+| Transport | Standard Limit |
+|-----------|---------------|
+| Azure Service Bus | 256 KB (standard tier), 1 MB (premium tier) |
+| Redis | Configurable, typically 512 MB |
+| AMQP (ActiveMQ Artemis) | Broker-dependent, typically 100 KB–10 MB |
+| In-Process | Unlimited |
+
+When a message payload exceeds the limit — for example, a document processing command that includes a file, or an event with a large data snapshot — the transport will reject it.
+
+## The Solution: Claim Check Pattern
+
+Nimbus solves this with the claim-check pattern: large message bodies are automatically offloaded to external storage (Azure Blob Storage), and only a reference token is sent via the transport. The receiver uses the token to retrieve the full payload.
+
+```
+Sender                         Transport              Blob Storage
+  │                               │                       │
+  ├─ message.Payload is large ──▶ │                       │
+  ├─ upload payload ─────────────────────────────────────▶│
+  │◀─ storage reference ──────────────────────────────────┤
+  ├─ send reference token ──────▶ │                       │
+  │                               ├─ deliver token ──▶ Receiver
+  │                               │                    │
+  │                               │                    ├─ fetch payload ─▶ Blob Storage
+  │                               │                    │◀─ payload ────────────────────
+  │                               │                    ├─ handler.Handle(message)
+```
+
+This happens transparently — your handler code receives the fully deserialized message object as normal.
+
+## Installation
+
+```bash
+dotnet add package Nimbus.LargeMessages.Azure
+```
+
+## Configuration
+
+Add large message storage to your bus configuration:
+
+```csharp
+using Nimbus.LargeMessages.Azure.Client;
+
+var bus = new BusBuilder()
+    .Configure()
+    .WithTransport(transport)
+    .WithNames("OrderService", Environment.MachineName)
+    .WithTypesFrom(typeProvider)
+    .WithAutofacDefaults(container)
+    .WithLargeMessageStorage(
+        new AzureBlobStorageLargeMessageStorageConfiguration()
+            .UsingStorageAccountConnectionString(
+                "DefaultEndpointsProtocol=https;AccountName=...;AccountKey=...;")
+            .UsingBlobStorageContainerName("nimbus-large-messages"))
+    .Build();
+```
+
+<Callout type="info">
+The blob storage container is created automatically if it doesn't exist. All services that share messages must be configured to use the same storage account and container.
+</Callout>
+
+## Size Thresholds
+
+Nimbus automatically decides whether to use blob offloading based on the serialized message size. The default threshold is set by the transport's limits, but you can also configure it explicitly on the `LargeMessageStorageConfiguration`:
+
+```csharp
+new AzureBlobStorageLargeMessageStorageConfiguration()
+    .UsingStorageAccountConnectionString(connectionString)
+    .UsingBlobStorageContainerName("nimbus-large-messages")
+    .WithMaxSmallMessageSize(64 * 1024)     // Messages under 64 KB go direct
+    .WithMaxLargeMessageSize(10 * 1024 * 1024) // Max blob size: 10 MB
+```
+
+Messages below `MaxSmallMessageSize` are sent directly via the transport. Messages above it are offloaded to blob storage.
+
+## What Counts as a "Large" Message?
+
+The serialized size of the message is what matters, not the size of your C# object. A message with a large string or byte array will serialize to a large payload:
+
+```csharp
+// This could easily exceed transport limits if DocumentContent is large
+public class ProcessDocumentCommand : IBusCommand
+{
+    public string DocumentId { get; set; }
+    public byte[] DocumentContent { get; set; }  // PDF, image, etc.
+    public string MimeType { get; set; }
+}
+```
+
+With large message support, sending this command works without any changes to the sender or handler:
+
+```csharp
+await bus.Send(new ProcessDocumentCommand
+{
+    DocumentId = "DOC-001",
+    DocumentContent = File.ReadAllBytes("contract.pdf"),  // 5 MB PDF
+    MimeType = "application/pdf"
+});
+```
+
+## Considerations
+
+### Storage Costs
+
+Blob storage adds a small cost per message. For most applications this is negligible, but high-throughput systems should monitor storage costs and blob lifecycle.
+
+### Latency
+
+Each large message requires an extra round-trip to blob storage on both send and receive. This adds a small amount of latency (typically 5–50ms) compared to direct transport delivery.
+
+### Cleanup
+
+Messages stored in blob storage are not automatically deleted. Configure a blob lifecycle policy to clean up old messages:
+
+```json
+{
+  "rules": [
+    {
+      "name": "delete-old-messages",
+      "enabled": true,
+      "filters": {
+        "blobTypes": ["blockBlob"],
+        "prefixMatch": ["nimbus-large-messages/"]
+      },
+      "actions": {
+        "baseBlob": {
+          "delete": { "daysAfterModificationGreaterThan": 7 }
+        }
+      }
+    }
+  ]
+}
+```
+
+### All Services Must Configure Large Message Storage
+
+If any service sends a large message, **all services that handle that message type** must be configured with the same large message storage. A service without large message support will fail to deserialize the claim-check token into the actual message.
+
+<Callout type="warning">
+Deploying large message support incrementally is tricky — ensure all services are updated before any service starts sending messages that exceed the direct-transport limit.
+</Callout>
+
+## Alternative: Keep Messages Small
+
+The cleanest solution to large messages is often to avoid them entirely:
+
+```csharp
+// ❌ Embedding large data in the message
+public class ProcessDocumentCommand : IBusCommand
+{
+    public byte[] DocumentContent { get; set; }  // Avoid this
+}
+
+// ✅ Reference the data instead
+public class ProcessDocumentCommand : IBusCommand
+{
+    public string DocumentId { get; set; }
+    public Uri DocumentStorageUri { get; set; }  // Reference to pre-uploaded blob
+}
+```
+
+Upload the document to blob storage first, then send just the reference. The handler fetches the document itself. This is simpler and avoids the claim-check complexity.
+
+## Next Steps
+
+- [Serialization](/docs/advanced/serialization) — understanding message size and format
+- [Error Handling](/docs/advanced/error-handling) — what happens when blob storage is unavailable
+- [Azure Service Bus transport](/docs/transports/azure-service-bus) — transport-specific size limits

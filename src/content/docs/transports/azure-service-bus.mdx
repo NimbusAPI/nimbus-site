@@ -1,0 +1,680 @@
+---
+title: "Azure Service Bus"
+description: "Complete guide to using Nimbus with Azure Service Bus for enterprise cloud messaging"
+category: "transports"
+order: 2
+---
+
+import Callout from '@components/ui/Callout.astro';
+
+## Overview
+
+Azure Service Bus is Microsoft's enterprise-grade cloud messaging service that provides reliable message queuing and publish/subscribe messaging. It's the recommended transport for production cloud deployments on Azure.
+
+## Key Benefits
+
+- **Fully Managed**: No infrastructure to maintain
+- **Enterprise Features**: Scheduled messages, dead-lettering, sessions, transactions
+- **High Reliability**: 99.9% SLA (standard), 99.95% (premium)
+- **Geo-Redundancy**: Built-in replication and disaster recovery
+- **Advanced Security**: Azure AD integration, RBAC, encryption at rest and in transit
+- **Seamless Azure Integration**: Works with Azure Monitor, Key Vault, Virtual Networks
+
+## Installation
+
+Install the Azure Service Bus transport package:
+
+```bash
+dotnet add package Nimbus.AzureServiceBus
+```
+
+## Quick Start
+
+### 1. Get Connection String
+
+From Azure Portal:
+1. Navigate to your Service Bus namespace
+2. Go to **Settings** → **Shared access policies**
+3. Select **RootManageSharedAccessKey** (or create a custom policy)
+4. Copy the **Primary Connection String**
+
+### 2. Configure Nimbus
+
+```csharp
+using Nimbus;
+using Nimbus.Configuration;
+using Nimbus.Infrastructure;
+
+var connectionString = "Endpoint=sb://your-namespace.servicebus.windows.net/;SharedAccessKeyName=...";
+
+var bus = new BusBuilder()
+    .Configure()
+    .WithTransport(new AzureServiceBusTransportConfiguration()
+        .WithConnectionString(connectionString))
+    .WithNames("OrderService", Environment.MachineName)
+    .WithTypesFrom(typeProvider)
+    .WithAutofacDefaults(container)
+    .Build();
+
+await bus.Start();
+```
+
+### 3. Send Your First Message
+
+```csharp
+public class PlaceOrderCommand : IBusCommand
+{
+    public string OrderId { get; set; }
+    public decimal Amount { get; set; }
+}
+
+await bus.Send(new PlaceOrderCommand
+{
+    OrderId = "ORDER-123",
+    Amount = 99.99m
+});
+```
+
+## Configuration Options
+
+### Basic Configuration
+
+```csharp
+var transport = new AzureServiceBusTransportConfiguration()
+    .WithConnectionString(connectionString)
+    .WithDefaultTimeout(TimeSpan.FromSeconds(30))
+    .WithMaxConcurrentCalls(10)
+    .WithAutoDeleteOnIdle(TimeSpan.FromDays(14));
+```
+
+### Connection String Options
+
+**From Configuration**:
+```csharp
+var connectionString = configuration.GetConnectionString("ServiceBus");
+var transport = new AzureServiceBusTransportConfiguration()
+    .WithConnectionString(connectionString);
+```
+
+**From Azure Key Vault**:
+```csharp
+var keyVaultClient = new KeyVaultClient(...);
+var connectionString = await keyVaultClient.GetSecretAsync(
+    "https://your-vault.vault.azure.net/",
+    "ServiceBusConnectionString"
+);
+
+var transport = new AzureServiceBusTransportConfiguration()
+    .WithConnectionString(connectionString.Value);
+```
+
+**Using Azure AD (Managed Identity)**:
+```csharp
+var transport = new AzureServiceBusTransportConfiguration()
+    .WithNamespaceEndpoint("your-namespace.servicebus.windows.net")
+    .WithManagedIdentity();
+```
+
+### Performance Tuning
+
+**Concurrency Settings**:
+```csharp
+var transport = new AzureServiceBusTransportConfiguration()
+    .WithConnectionString(connectionString)
+    .WithMaxConcurrentCalls(20)              // Process up to 20 messages concurrently
+    .WithPrefetchCount(100)                  // Prefetch messages for better throughput
+    .WithMaxAutoRenewDuration(TimeSpan.FromMinutes(5));  // Lock renewal time
+```
+
+**Batch Processing**:
+```csharp
+var transport = new AzureServiceBusTransportConfiguration()
+    .WithConnectionString(connectionString)
+    .WithBatchFlushInterval(TimeSpan.FromSeconds(1))  // Flush batch every second
+    .WithMaxBatchSize(100);                            // Max messages per batch
+```
+
+### Retry Policy
+
+```csharp
+var retryPolicy = new RetryExponential(
+    minimumBackoff: TimeSpan.FromSeconds(1),
+    maximumBackoff: TimeSpan.FromMinutes(5),
+    maximumRetryCount: 5
+);
+
+var transport = new AzureServiceBusTransportConfiguration()
+    .WithConnectionString(connectionString)
+    .WithRetryPolicy(retryPolicy);
+```
+
+## Service Tiers
+
+### Standard Tier
+
+**Best for**: Development, testing, small-scale production
+
+**Features**:
+- Variable capacity (shared infrastructure)
+- Pay per operation
+- 256 KB max message size
+- Standard messaging features
+
+**Pricing**: ~$10/month base + $0.05 per million operations
+
+```csharp
+// Standard tier configuration
+var transport = new AzureServiceBusTransportConfiguration()
+    .WithConnectionString(connectionString)
+    .WithMaxMessageSizeInKilobytes(256);
+```
+
+### Premium Tier
+
+**Best for**: Large-scale production, predictable performance
+
+**Features**:
+- Dedicated capacity (isolated compute and storage)
+- Predictable performance
+- 1 MB max message size
+- Virtual network support
+- Geo-disaster recovery
+- Up to 100 million messages per day per unit
+
+**Pricing**: ~$670/month per messaging unit
+
+```csharp
+// Premium tier configuration
+var transport = new AzureServiceBusTransportConfiguration()
+    .WithConnectionString(connectionString)
+    .WithMaxMessageSizeInKilobytes(1024)
+    .WithMaxConcurrentCalls(100)
+    .WithPrefetchCount(1000);
+```
+
+<Callout type="tip">
+**Choosing a Tier**: Start with Standard for development. Move to Premium when you need:
+- Consistent performance (no noisy neighbors)
+- Higher throughput (>1000 messages/second)
+- Larger message sizes
+- VNet integration
+- SLA guarantees
+</Callout>
+
+## Advanced Features
+
+### Scheduled Messages
+
+Send messages for future delivery:
+
+```csharp
+public class ScheduledOrderCommand : IBusCommand
+{
+    public string OrderId { get; set; }
+}
+
+// Send message to be delivered in 1 hour
+var message = new ScheduledOrderCommand { OrderId = "ORDER-123" };
+await bus.Send(message, deliverAfter: DateTime.UtcNow.AddHours(1));
+```
+
+Azure Service Bus natively supports scheduled messages with precision timing.
+
+### Message Sessions
+
+For ordered processing and stateful workflows:
+
+```csharp
+// Enable sessions on queue/topic
+var transport = new AzureServiceBusTransportConfiguration()
+    .WithConnectionString(connectionString)
+    .WithSessionsEnabled(true);
+
+// Send messages with session ID
+public class ProcessOrderCommand : IBusCommand, ISessionMessage
+{
+    public string OrderId { get; set; }
+    public string SessionId => OrderId;  // All messages for same order use same session
+}
+
+// Handler receives messages in order per session
+public class ProcessOrderHandler : IHandleCommand<ProcessOrderCommand>
+{
+    public async Task Handle(ProcessOrderCommand command)
+    {
+        // Messages for same OrderId processed sequentially
+        // Messages for different OrderIds processed in parallel
+    }
+}
+```
+
+### Dead Letter Queues
+
+Automatically handle failed messages:
+
+```csharp
+var transport = new AzureServiceBusTransportConfiguration()
+    .WithConnectionString(connectionString)
+    .WithMaxDeliveryCount(5);  // Move to dead letter after 5 attempts
+
+// Monitor dead letter queue
+public class DeadLetterMonitor
+{
+    public async Task ProcessDeadLetters()
+    {
+        var receiver = managementClient.GetDeadLetterQueueReceiver("OrderService.PlaceOrderCommand");
+
+        var messages = await receiver.ReceiveMessagesAsync(maxMessages: 10);
+        foreach (var message in messages)
+        {
+            // Log, alert, or reprocess
+            Console.WriteLine($"Dead letter: {message.MessageId}");
+            Console.WriteLine($"Reason: {message.DeadLetterReason}");
+        }
+    }
+}
+```
+
+### Message Deduplication
+
+Enable duplicate detection for exactly-once semantics:
+
+```csharp
+var transport = new AzureServiceBusTransportConfiguration()
+    .WithConnectionString(connectionString)
+    .WithDuplicateDetectionHistoryTimeWindow(TimeSpan.FromMinutes(10));
+
+// Messages with same MessageId within window are deduplicated
+await bus.Send(new PlaceOrderCommand
+{
+    OrderId = "ORDER-123"
+    // Nimbus sets MessageId automatically, or you can specify it
+});
+```
+
+### Transactions
+
+Atomic message operations:
+
+```csharp
+public class PlaceOrderHandler : IHandleCommand<PlaceOrderCommand>
+{
+    private readonly IOrderRepository _repository;
+    private readonly IBus _bus;
+
+    public async Task Handle(PlaceOrderCommand command)
+    {
+        using (var transaction = new TransactionScope(TransactionScopeAsyncFlowOption.Enabled))
+        {
+            // Create order in database
+            await _repository.CreateOrder(command);
+
+            // Send follow-up messages
+            await _bus.Send(new ProcessPaymentCommand { OrderId = command.OrderId });
+            await _bus.Publish(new OrderPlacedEvent { OrderId = command.OrderId });
+
+            transaction.Complete();  // All or nothing
+        }
+    }
+}
+```
+
+### Large Messages
+
+For messages exceeding size limits, use blob storage:
+
+```csharp
+var transport = new AzureServiceBusTransportConfiguration()
+    .WithConnectionString(connectionString)
+    .WithLargeMessageBodyStore(
+        new AzureBlobStorageLargeMessageBodyStore(
+            storageConnectionString,
+            containerName: "nimbus-large-messages"
+        )
+    );
+
+// Automatically uses blob storage for large payloads
+await bus.Send(new ProcessLargeDataCommand
+{
+    Data = largeByteArray  // Can be > 256KB/1MB
+});
+```
+
+See [Large Messages guide](/docs/advanced/large-messages) for details.
+
+## Security
+
+### Managed Identity (Recommended)
+
+Avoid connection strings in production:
+
+```csharp
+// Enable managed identity for your App Service / Azure Function / VM
+// Grant "Azure Service Bus Data Owner" role to the managed identity
+
+var transport = new AzureServiceBusTransportConfiguration()
+    .WithNamespaceEndpoint("your-namespace.servicebus.windows.net")
+    .WithManagedIdentity();
+```
+
+### Shared Access Signatures (SAS)
+
+Create limited-access policies:
+
+```csharp
+// In Azure Portal, create custom policy with minimal permissions:
+// - Send: For producers
+// - Listen: For consumers
+// - Manage: For admin operations
+
+var senderConnectionString = "Endpoint=...;SharedAccessKeyName=SendOnlyPolicy;...";
+var receiverConnectionString = "Endpoint=...;SharedAccessKeyName=ListenOnlyPolicy;...";
+
+// Use appropriate connection string per service
+```
+
+### Virtual Network Integration
+
+Restrict access to specific VNets (Premium tier):
+
+```csharp
+// In Azure Portal:
+// Service Bus → Networking → Private endpoints
+// Add private endpoint to your VNet
+
+var transport = new AzureServiceBusTransportConfiguration()
+    .WithConnectionString(connectionString)
+    .WithTransportType(TransportType.AmqpWebSockets);  // Works with firewall
+```
+
+## Monitoring and Diagnostics
+
+### Azure Monitor Integration
+
+```csharp
+var transport = new AzureServiceBusTransportConfiguration()
+    .WithConnectionString(connectionString)
+    .WithDiagnosticsEnabled(true);
+
+// Metrics available in Azure Monitor:
+// - Active Messages
+// - Dead Letter Messages
+// - Incoming/Outgoing Messages
+// - Throttled Requests
+// - Server Errors
+```
+
+### Application Insights
+
+```csharp
+using Microsoft.ApplicationInsights;
+
+public class OrderHandler : IHandleCommand<PlaceOrderCommand>
+{
+    private readonly TelemetryClient _telemetry;
+
+    public async Task Handle(PlaceOrderCommand command)
+    {
+        using (_telemetry.StartOperation<RequestTelemetry>("ProcessOrder"))
+        {
+            _telemetry.TrackEvent("OrderReceived", new Dictionary<string, string>
+            {
+                { "OrderId", command.OrderId },
+                { "Queue", "OrderService.PlaceOrderCommand" }
+            });
+
+            // Process order...
+        }
+    }
+}
+```
+
+### Health Checks
+
+```csharp
+public class ServiceBusHealthCheck : IHealthCheck
+{
+    private readonly IBus _bus;
+    private readonly ServiceBusAdministrationClient _adminClient;
+
+    public async Task<HealthCheckResult> CheckHealthAsync(
+        HealthCheckContext context,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            // Check namespace is reachable
+            var namespaceInfo = await _adminClient.GetNamespacePropertiesAsync(cancellationToken);
+
+            // Check queue depth
+            var queueName = "OrderService.PlaceOrderCommand";
+            var queueInfo = await _adminClient.GetQueueRuntimePropertiesAsync(queueName, cancellationToken);
+
+            if (queueInfo.ActiveMessageCount > 10000)
+            {
+                return HealthCheckResult.Degraded($"Queue depth high: {queueInfo.ActiveMessageCount}");
+            }
+
+            return HealthCheckResult.Healthy($"Connected to {namespaceInfo.Name}");
+        }
+        catch (Exception ex)
+        {
+            return HealthCheckResult.Unhealthy("Cannot connect to Service Bus", ex);
+        }
+    }
+}
+
+// Register in ASP.NET Core
+services.AddHealthChecks()
+    .AddCheck<ServiceBusHealthCheck>("servicebus");
+```
+
+## Best Practices
+
+### 1. Use Connection Pooling
+
+```csharp
+// ✅ GOOD: Single bus instance (singleton)
+services.AddSingleton<IBus>(provider =>
+{
+    var bus = new BusBuilder()
+        .Configure()
+        .WithTransport(transport)
+        .Build();
+    bus.Start().Wait();
+    return bus;
+});
+
+// ❌ BAD: Creating bus per request
+services.AddScoped<IBus>(...);  // Don't do this!
+```
+
+### 2. Set Appropriate Timeouts
+
+```csharp
+var transport = new AzureServiceBusTransportConfiguration()
+    .WithConnectionString(connectionString)
+    .WithDefaultTimeout(TimeSpan.FromSeconds(30))      // Overall timeout
+    .WithMaxAutoRenewDuration(TimeSpan.FromMinutes(5)); // Lock renewal
+```
+
+### 3. Handle Transient Failures
+
+```csharp
+public class ResilientOrderHandler : IHandleCommand<PlaceOrderCommand>
+{
+    public async Task Handle(PlaceOrderCommand command)
+    {
+        // Nimbus automatically retries transient failures
+        // Your handler should be idempotent
+
+        var order = await _repository.GetOrCreateOrder(command.OrderId);
+        if (order.Status == OrderStatus.Completed)
+        {
+            return;  // Already processed
+        }
+
+        // Process order...
+    }
+}
+```
+
+### 4. Monitor Queue Depth
+
+```csharp
+// Set up alerts in Azure Monitor
+// Alert when: ActiveMessageCount > threshold for > 5 minutes
+// Indicates consumers can't keep up with producers
+```
+
+### 5. Clean Up Old Entities
+
+```csharp
+var transport = new AzureServiceBusTransportConfiguration()
+    .WithConnectionString(connectionString)
+    .WithAutoDeleteOnIdle(TimeSpan.FromDays(14));  // Auto-delete unused queues
+```
+
+## Common Issues
+
+### Issue: "Quota exceeded" errors
+
+**Cause**: Too many queues/topics or message size exceeded
+
+**Solution**:
+```csharp
+// Reduce number of message types, or use shared queues
+public class SharedQueueRouter : IRouter
+{
+    public string Route(Type messageType, QueueOrTopic queueOrTopic, string applicationName)
+    {
+        // Route multiple types to same queue
+        return $"{applicationName}.Commands";
+    }
+}
+
+// Or upgrade to premium tier for higher quotas
+```
+
+### Issue: Messages going to dead letter
+
+**Cause**: Handler throwing exceptions or processing taking too long
+
+**Solution**:
+```csharp
+// Increase lock duration and max delivery attempts
+var transport = new AzureServiceBusTransportConfiguration()
+    .WithConnectionString(connectionString)
+    .WithDefaultMessageTimeToLive(TimeSpan.FromDays(14))
+    .WithMaxDeliveryCount(10)
+    .WithMaxAutoRenewDuration(TimeSpan.FromMinutes(10));
+
+// Make handler more resilient
+public async Task Handle(Command command)
+{
+    try
+    {
+        await ProcessWithRetry(command);
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "Failed to process command");
+        throw;  // Let Nimbus/Service Bus handle retry
+    }
+}
+```
+
+### Issue: High costs
+
+**Cause**: Too many operations or wrong tier
+
+**Solution**:
+```csharp
+// Use batching to reduce operations
+var transport = new AzureServiceBusTransportConfiguration()
+    .WithConnectionString(connectionString)
+    .WithBatchFlushInterval(TimeSpan.FromSeconds(1))
+    .WithMaxBatchSize(100);
+
+// Or consider Redis for high-volume scenarios
+```
+
+## Migration from Other Transports
+
+### From Redis to Azure Service Bus
+
+```csharp
+// Before (Redis)
+var transport = new RedisTransportConfiguration()
+    .WithConnectionString("localhost:6379");
+
+// After (Azure Service Bus) - same application code!
+var transport = new AzureServiceBusTransportConfiguration()
+    .WithConnectionString(azureConnectionString);
+
+// No changes needed to:
+// - Message classes
+// - Handlers
+// - Send/Publish/Request calls
+```
+
+Only configuration changes required!
+
+## Performance Optimization
+
+### Premium Tier Settings
+
+```csharp
+var transport = new AzureServiceBusTransportConfiguration()
+    .WithConnectionString(connectionString)
+    .WithMaxConcurrentCalls(100)         // Higher concurrency
+    .WithPrefetchCount(1000)             // Aggressive prefetching
+    .WithBatchFlushInterval(TimeSpan.FromMilliseconds(50))
+    .WithMaxBatchSize(100);
+```
+
+### Partitioning
+
+```csharp
+// Enable partitioning for higher throughput
+// (Done in Azure Portal when creating queue/topic)
+// Nimbus automatically works with partitioned entities
+```
+
+## Environment-Specific Configuration
+
+```csharp
+public static IConfiguration Configuration { get; set; }
+
+public static INimbusTransport CreateTransport()
+{
+    var environment = Configuration["Environment"];
+    var connectionString = Configuration.GetConnectionString("ServiceBus");
+
+    var config = new AzureServiceBusTransportConfiguration()
+        .WithConnectionString(connectionString);
+
+    if (environment == "Production")
+    {
+        config
+            .WithMaxConcurrentCalls(50)
+            .WithPrefetchCount(500)
+            .WithDuplicateDetectionHistoryTimeWindow(TimeSpan.FromMinutes(10));
+    }
+    else
+    {
+        config
+            .WithMaxConcurrentCalls(5)
+            .WithPrefetchCount(10);
+    }
+
+    return config;
+}
+```
+
+## Next Steps
+
+- Learn about [message patterns](/docs/architecture/message-patterns) supported by Azure Service Bus
+- Implement [error handling](/docs/advanced/error-handling) strategies
+- Set up [monitoring and logging](/docs/guides/logging)
+- Explore [large message support](/docs/advanced/large-messages)

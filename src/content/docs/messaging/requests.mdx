@@ -1,0 +1,236 @@
+---
+title: "Requests"
+description: "Use requests in Nimbus for synchronous request/response messaging between services"
+category: "messaging"
+order: 3
+---
+
+import Callout from '@components/ui/Callout.astro';
+
+## What is a Request?
+
+A request is a message that expects a **single response** from a single handler. It implements the request/response pattern over the message bus, allowing services to query each other without tight coupling through direct HTTP calls.
+
+**Key properties:**
+- **One handler**: Exactly one handler processes each request
+- **Response expected**: The caller awaits a typed response
+- **Timeout support**: Requests fail fast if the handler doesn't respond in time
+- **Query-oriented**: Best used for reading data, not triggering actions
+
+<Callout type="info">
+Requests are useful for querying data from another service while keeping services loosely coupled. They flow through the same transport as commands and events, so there's no need for a separate HTTP layer.
+</Callout>
+
+## Defining a Request
+
+Implement `IBusRequest<TRequest, TResponse>` to create a request/response pair:
+
+```csharp
+using Nimbus.MessageContracts;
+
+// The request
+public class GetOrderRequest : IBusRequest<GetOrderRequest, OrderDto>
+{
+    public string OrderId { get; set; }
+}
+
+// The response
+public class OrderDto
+{
+    public string OrderId { get; set; }
+    public string CustomerId { get; set; }
+    public OrderStatus Status { get; set; }
+    public decimal TotalAmount { get; set; }
+    public DateTime CreatedAt { get; set; }
+}
+```
+
+The response type is a plain class — it does not need to implement any interface.
+
+## Creating a Handler
+
+Implement `IHandleRequest<TRequest, TResponse>`:
+
+```csharp
+using Nimbus.Handlers;
+
+public class GetOrderHandler : IHandleRequest<GetOrderRequest, OrderDto>
+{
+    private readonly IOrderRepository _orderRepository;
+
+    public GetOrderHandler(IOrderRepository orderRepository)
+    {
+        _orderRepository = orderRepository;
+    }
+
+    public async Task<OrderDto> Handle(GetOrderRequest request)
+    {
+        var order = await _orderRepository.GetById(request.OrderId);
+
+        if (order == null)
+            return null;
+
+        return new OrderDto
+        {
+            OrderId = order.Id,
+            CustomerId = order.CustomerId,
+            Status = order.Status,
+            TotalAmount = order.TotalAmount,
+            CreatedAt = order.CreatedAt
+        };
+    }
+}
+```
+
+Returning `null` is valid — the caller will receive `null` as the response value.
+
+## Sending a Request
+
+Use `IBus.Request` to send a request and await the response:
+
+```csharp
+var response = await bus.Request<GetOrderRequest, OrderDto>(
+    new GetOrderRequest { OrderId = "ORDER-123" }
+);
+
+if (response != null)
+{
+    Console.WriteLine($"Order {response.OrderId}: {response.Status}");
+}
+else
+{
+    Console.WriteLine("Order not found.");
+}
+```
+
+The calling code blocks until the response arrives or the request times out.
+
+## Configuring Timeouts
+
+The default timeout is set when configuring the bus. You can also specify per-request timeouts:
+
+```csharp
+var response = await bus.Request<GetOrderRequest, OrderDto>(
+    new GetOrderRequest { OrderId = "ORDER-123" },
+    timeout: TimeSpan.FromSeconds(10)
+);
+```
+
+If the handler doesn't respond within the timeout, a `TimeoutException` is thrown.
+
+```csharp
+try
+{
+    var response = await bus.Request<GetOrderRequest, OrderDto>(request, timeout: TimeSpan.FromSeconds(5));
+}
+catch (TimeoutException)
+{
+    // Handle timeout — order service may be unavailable
+    _logger.Warning("Order service did not respond in time for order {OrderId}", request.OrderId);
+    return null;
+}
+```
+
+<Callout type="warning">
+Always handle `TimeoutException` in production code. Downstream services can be slow or temporarily unavailable.
+</Callout>
+
+## How Requests Work
+
+Under the hood, Nimbus creates a temporary reply queue for each request:
+
+```
+[Sender]
+    │── sends GetOrderRequest ──▶ [Order Service Queue]
+    │                                     │
+    │                              [GetOrderHandler]
+    │                                     │
+    │◀── receives OrderDto response ──────┘
+    │    (via temporary reply queue)
+```
+
+This is all handled transparently — you don't need to manage reply queues yourself.
+
+## Request Best Practices
+
+### Keep Requests Read-Only
+
+Requests should query data, not trigger side effects:
+
+```csharp
+// ✅ Good: Read-only query
+public async Task<OrderDto> Handle(GetOrderRequest request)
+{
+    return MapToDto(await _repository.GetById(request.OrderId));
+}
+
+// ❌ Avoid: Side effects in a request handler
+public async Task<OrderDto> Handle(GetOrderRequest request)
+{
+    var order = await _repository.GetById(request.OrderId);
+    order.LastViewedAt = DateTime.UtcNow; // Side effect — unexpected for a query
+    await _repository.Save(order);
+    return MapToDto(order);
+}
+```
+
+If you need to perform an action and get a result, consider sending a [Command](/docs/messaging/commands) and then querying separately.
+
+### Keep Payloads Small
+
+Request and response payloads travel over the message bus. Keep them focused:
+
+```csharp
+// ✅ Good: Return only what the caller needs
+public class OrderSummaryDto
+{
+    public string OrderId { get; set; }
+    public OrderStatus Status { get; set; }
+    public decimal TotalAmount { get; set; }
+}
+
+// ❌ Avoid: Returning entire domain objects with nested collections
+public class FullOrderDto
+{
+    public Order Order { get; set; }         // Full entity
+    public List<AuditEntry> AuditLog { get; set; } // Probably not needed by caller
+}
+```
+
+### Handle Null Responses
+
+A handler may legitimately return `null` (e.g., when a record doesn't exist). Always handle this case:
+
+```csharp
+var order = await bus.Request<GetOrderRequest, OrderDto>(request);
+if (order is null)
+{
+    return NotFound();
+}
+```
+
+## Handler Registration
+
+Register request handlers with your DI container. With Autofac:
+
+```csharp
+builder.RegisterAssemblyTypes(typeof(GetOrderHandler).Assembly)
+       .AsImplementedInterfaces();
+```
+
+## When to Use Requests
+
+Requests are the right choice when:
+
+- You need to **query data** from another service
+- You expect **exactly one response**
+- The caller needs to **wait for the answer** before proceeding
+- You want to avoid tight coupling through direct HTTP/gRPC calls
+
+If you need responses from **multiple handlers**, use [Multicast Requests](/docs/messaging/multicast-requests) instead.
+
+## Next Steps
+
+- [Multicast Requests](/docs/messaging/multicast-requests) — gather responses from multiple handlers
+- [Commands](/docs/messaging/commands) — trigger actions without waiting for a result
+- [Events](/docs/messaging/events) — broadcast notifications to multiple subscribers

@@ -1,16 +1,123 @@
 ---
-
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Header from '../components/layout/Header.astro';
+import Footer from '../components/layout/Footer.astro';
+import FeatureGrid from '../components/docs/FeatureGrid.astro';
+import Button from '../components/ui/Button.astro';
+import { Image } from 'astro:assets';
+import logo from '../assets/logo.png';
 ---
 
-<html lang="en">
-	<head>
-		<meta charset="utf-8" />
-		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-		<meta name="viewport" content="width=device-width" />
-		<meta name="generator" content={Astro.generator} />
-		<title>Astro</title>
-	</head>
-	<body>
-		<h1>Astro</h1>
-	</body>
-</html>
+<BaseLayout>
+  <Header />
+
+  <!-- Hero Section -->
+  <section class="max-w-screen-xl mx-auto px-4 sm:px-6 lg:px-8 py-20 md:py-32">
+    <div class="text-center">
+      <div class="flex justify-center mb-10">
+        <Image
+          src={logo}
+          alt="NimbusAPI"
+          height={160}
+          class="h-40 w-auto"
+        />
+      </div>
+
+      <p class="text-xl md:text-2xl text-gray-600 mb-8 max-w-3xl mx-auto">
+        Transport-Agnostic .NET Messaging Framework
+      </p>
+
+      <p class="text-lg text-gray-600 mb-12 max-w-2xl mx-auto">
+        Write messaging code once, run it on Azure Service Bus, Redis, AMQP, SQL Server, PostgreSQL, or any other transport.
+        Nimbus provides a clean abstraction over messaging infrastructure.
+      </p>
+
+      <div class="flex flex-col sm:flex-row gap-4 justify-center">
+        <Button href="/docs/getting-started" variant="primary">
+          Get Started →
+        </Button>
+        <Button href="https://github.com/NimbusAPI/Nimbus" variant="secondary" external>
+          View on GitHub
+        </Button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Quick Start Code Example -->
+  <section class="bg-gray-50 py-16">
+    <div class="max-w-screen-xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="max-w-3xl mx-auto">
+        <h2 class="text-2xl font-bold text-gray-900 mb-6 text-center">Quick Start</h2>
+
+        <div class="bg-white rounded-xl border border-gray-300 overflow-hidden" style="box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.08), 0 2px 4px -2px rgb(0 0 0 / 0.06)">
+          <div class="bg-gray-100 px-4 py-3 border-b border-gray-200 flex items-center gap-1.5">
+            <span class="w-3 h-3 rounded-full bg-red-300 inline-block"></span>
+            <span class="w-3 h-3 rounded-full bg-yellow-200 inline-block"></span>
+            <span class="w-3 h-3 rounded-full bg-green-300 inline-block"></span>
+            <span class="text-xs font-mono text-gray-500 ml-2">Configure and send your first message</span>
+          </div>
+          <pre class="p-6 overflow-x-auto"><code class="language-csharp">// Define a command
+public class PlaceOrderCommand : IBusCommand
+{'{'}
+    public string OrderId {'{'} get; set; {'}'}
+    public decimal Amount {'{'} get; set; {'}'}
+{'}'}
+
+// Create a handler
+public class PlaceOrderHandler : IHandleCommand&lt;PlaceOrderCommand&gt;
+{'{'}
+    public async Task Handle(PlaceOrderCommand command)
+    {'{'}
+        // Process the order
+        Console.WriteLine($"Processing order {'{'}command.OrderId{'}'}");
+    {'}'}
+{'}'}
+
+// Configure the bus
+var bus = new BusBuilder()
+    .Configure()
+    .WithTransport(new RedisTransportConfiguration()
+        .WithConnectionString("localhost:6379"))
+    .WithNames("MyApp", Environment.MachineName)
+    .WithTypesFrom(typeProvider)
+    .WithAutofacDefaults(componentContext)
+    .Build();
+
+// Send a command
+await bus.Send(new PlaceOrderCommand
+{'{'}
+    OrderId = "12345",
+    Amount = 99.99m
+{'}'});</code></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features Grid -->
+  <section class="max-w-screen-xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
+    <h2 class="text-3xl font-bold text-gray-900 mb-4 text-center">Features</h2>
+    <p class="text-lg text-gray-600 mb-12 text-center max-w-2xl mx-auto">
+      Everything you need to build reliable, scalable messaging applications
+    </p>
+
+    <FeatureGrid />
+  </section>
+
+  <!-- Call to Action -->
+  <section class="bg-blue-600 py-16">
+    <div class="max-w-screen-xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+      <h2 class="text-3xl font-bold text-white mb-6">
+        Ready to get started?
+      </h2>
+      <p class="text-xl text-blue-100 mb-8 max-w-2xl mx-auto">
+        Install Nimbus from NuGet and start building transport-agnostic messaging applications today.
+      </p>
+      <Button href="/docs/getting-started" variant="secondary">
+        Read the Documentation →
+      </Button>
+    </div>
+  </section>
+
+  <Footer />
+</BaseLayout>

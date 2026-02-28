@@ -1,0 +1,299 @@
+---
+title: "Error Handling"
+description: "Handle message processing failures in Nimbus using retries, dead letter queues, and error interceptors"
+category: "advanced"
+order: 4
+---
+
+import Callout from '@components/ui/Callout.astro';
+
+## Overview
+
+Distributed messaging introduces failure modes that don't exist in direct function calls: handlers can fail, the transport can be temporarily unavailable, and messages can be malformed. Nimbus and the underlying transports provide several mechanisms to handle these gracefully.
+
+## What Happens When a Handler Throws
+
+When a handler throws an exception, Nimbus does not acknowledge the message. The transport retries delivery according to its configured policy:
+
+```
+Message arrives
+    │
+    ▼
+Handler throws exception
+    │
+    ▼
+Message is NOT acknowledged (nacked)
+    │
+    ▼
+Transport re-queues the message
+    │
+    ▼
+Retry after delay (transport-dependent)
+    │
+    ▼
+[Repeat until max delivery attempts reached]
+    │
+    ▼
+Message moved to dead letter queue
+```
+
+Your handler code doesn't need to do anything special — just let exceptions propagate:
+
+```csharp
+public class PlaceOrderHandler : IHandleCommand<PlaceOrderCommand>
+{
+    public async Task Handle(PlaceOrderCommand command)
+    {
+        // If this throws, Nimbus will retry the message
+        var order = await _orderRepository.Save(command);
+
+        // If this throws, Nimbus will retry the message
+        // The repository operation may or may not have committed — design for idempotency
+        await _bus.Publish(new OrderPlacedEvent { OrderId = order.Id });
+    }
+}
+```
+
+## Retry Policies
+
+Each transport has its own default retry behaviour:
+
+| Transport | Default Retries | Retry Strategy |
+|-----------|----------------|----------------|
+| Azure Service Bus | 10 (configurable) | Exponential backoff |
+| Redis | Immediate re-queue | No backoff |
+| AMQP (ActiveMQ Artemis) | Broker-configured | Depends on broker |
+| In-Process | None | Dropped or re-queued |
+
+### Azure Service Bus
+
+Configure max delivery attempts on the transport:
+
+```csharp
+var transport = new AzureServiceBusTransportConfiguration()
+    .WithConnectionString(connectionString)
+    .WithMaxDeliveryAttempts(5);  // Retry up to 5 times before dead-lettering
+```
+
+### Redis
+
+Redis re-queues immediately on failure. Configure your handler to implement its own backoff for transient errors:
+
+```csharp
+public async Task Handle(PlaceOrderCommand command)
+{
+    var attempt = 0;
+    while (true)
+    {
+        try
+        {
+            await _externalService.Process(command);
+            return;
+        }
+        catch (TransientException) when (attempt < 3)
+        {
+            attempt++;
+            await Task.Delay(TimeSpan.FromSeconds(Math.Pow(2, attempt)));
+        }
+    }
+}
+```
+
+## Dead Letter Queues
+
+After exhausting retries, messages are moved to a **dead letter queue** (DLQ). The DLQ acts as a quarantine for messages that couldn't be processed — they can be inspected, fixed, and resubmitted.
+
+<Callout type="info">
+Not all transports support dead letter queues natively. Azure Service Bus has built-in DLQ support. Redis and In-Process require manual dead letter handling.
+</Callout>
+
+### Azure Service Bus DLQ
+
+Azure Service Bus automatically creates a dead letter sub-queue for each queue and topic subscription. Messages moved there include the reason for dead-lettering:
+
+| DLQ Reason | Description |
+|------------|-------------|
+| `MaxDeliveryCountExceeded` | Exceeded max retry attempts |
+| `MessageTimeToLiveExpired` | Message TTL expired before processing |
+| `HeaderSizeExceeded` | Message headers too large |
+
+### Monitoring Dead Letter Queues
+
+Monitor DLQ depth as a key operational metric. High DLQ depth indicates a systemic problem:
+
+```csharp
+// Azure Service Bus - check DLQ depth using the SDK directly
+var receiver = serviceBusClient.CreateReceiver(
+    "OrderService.PlaceOrderCommand/$deadletterqueue");
+
+// Read and inspect dead-lettered messages
+await foreach (var message in receiver.ReceiveMessagesAsync())
+{
+    Console.WriteLine($"Dead letter reason: {message.DeadLetterReason}");
+    Console.WriteLine($"Error description: {message.DeadLetterErrorDescription}");
+    Console.WriteLine($"Original message: {message.Body}");
+}
+```
+
+### Reprocessing Dead-Lettered Messages
+
+After fixing the root cause, resubmit messages from the DLQ:
+
+```csharp
+// Move from DLQ back to the main queue for reprocessing
+var dlqReceiver = serviceBusClient.CreateReceiver(
+    "OrderService.PlaceOrderCommand/$deadletterqueue");
+var sender = serviceBusClient.CreateSender("OrderService.PlaceOrderCommand");
+
+var messages = await dlqReceiver.ReceiveMessagesAsync(maxMessages: 100);
+foreach (var message in messages)
+{
+    var resent = new ServiceBusMessage(message.Body);
+    await sender.SendMessageAsync(resent);
+    await dlqReceiver.CompleteMessageAsync(message);
+}
+```
+
+## Idempotent Handlers
+
+Because messages can be delivered more than once (retries, at-least-once delivery semantics), handlers must be idempotent — processing the same message twice must produce the same outcome as processing it once.
+
+### Natural Idempotency
+
+Some operations are naturally idempotent:
+
+```csharp
+public async Task Handle(UpdateOrderStatusCommand command)
+{
+    // Setting a status is idempotent — doing it twice has no extra effect
+    await _repository.SetStatus(command.OrderId, command.Status);
+}
+```
+
+### Idempotency Keys
+
+For operations that aren't naturally idempotent, track processed message IDs:
+
+```csharp
+public class SendEmailHandler : IHandleCommand<SendEmailCommand>
+{
+    private readonly IEmailService _emailService;
+    private readonly IProcessedMessageLog _log;
+
+    public async Task Handle(SendEmailCommand command)
+    {
+        // Check if we've already processed this exact message
+        if (await _log.AlreadyProcessed(command.MessageId))
+        {
+            return; // Duplicate — skip processing
+        }
+
+        await _emailService.Send(command.To, command.Subject, command.Body);
+
+        // Record that we've processed this message
+        await _log.Record(command.MessageId);
+    }
+}
+```
+
+<Callout type="warning">
+The idempotency check and the business action should ideally be in the same transaction. If they're not, a failure between them can leave the system in an inconsistent state.
+</Callout>
+
+## Using Interceptors for Error Handling
+
+Use [inbound interceptors](/docs/advanced/interceptors) to centralise error handling logic across all handlers:
+
+```csharp
+public class ErrorLoggingInterceptor : IInboundInterceptor
+{
+    private readonly ILogger _logger;
+    private readonly IAlertService _alerts;
+
+    public int Priority => 0;
+
+    public async Task OnCommandHandlerError<TCommand>(
+        TCommand command, NimbusMessage message, Exception exception)
+        where TCommand : IBusCommand
+    {
+        _logger.Error(exception,
+            "Handler failed for {CommandType} (attempt {Attempt}/{Max}) [{MessageId}]",
+            typeof(TCommand).Name,
+            message.DeliveryCount,
+            _maxDeliveryAttempts,
+            message.MessageId);
+
+        // Alert on final delivery attempt
+        if (message.DeliveryCount >= _maxDeliveryAttempts)
+        {
+            await _alerts.Send(
+                $"Message dead-lettered: {typeof(TCommand).Name}",
+                exception.ToString());
+        }
+    }
+
+    // Implement no-ops for other methods...
+}
+```
+
+## Transient vs. Permanent Failures
+
+Not all exceptions are equal. Design handlers to distinguish between failures that should retry and ones that shouldn't:
+
+```csharp
+public async Task Handle(PlaceOrderCommand command)
+{
+    try
+    {
+        await _orderRepository.Save(command);
+    }
+    catch (SqlException ex) when (ex.IsTransient)
+    {
+        // Transient DB error — let it throw, transport will retry
+        throw;
+    }
+    catch (ValidationException ex)
+    {
+        // Permanent failure — retrying won't help
+        // Log and swallow to avoid DLQ noise for bad data
+        _logger.Warning(ex, "Invalid command data for order {OrderId}", command.OrderId);
+        return; // Acknowledge the message — don't retry
+    }
+}
+```
+
+<Callout type="tip">
+Swallowing exceptions (returning without throwing) tells Nimbus to acknowledge the message, removing it from the queue without retry. Do this only for permanent failures where retrying would never succeed.
+</Callout>
+
+## Message Expiration
+
+Messages can have a time-to-live (TTL). If not processed within the TTL, they expire and are dead-lettered:
+
+```csharp
+// Set TTL when sending — relevant for time-sensitive commands
+await bus.Send(
+    new SendTimeSensitiveAlertCommand { AlertId = "ALERT-001" },
+    expiresAfter: DateTimeOffset.UtcNow.AddMinutes(15));
+```
+
+Design handlers to check whether the action is still relevant for time-sensitive messages:
+
+```csharp
+public async Task Handle(SendTimeSensitiveAlertCommand command)
+{
+    if (command.RelevantUntil < DateTimeOffset.UtcNow)
+    {
+        _logger.Information("Alert {AlertId} is no longer relevant, skipping", command.AlertId);
+        return; // Acknowledge and discard
+    }
+
+    await _alertService.Send(command.AlertId);
+}
+```
+
+## Next Steps
+
+- [Interceptors](/docs/advanced/interceptors) — centralise error logging across all handlers
+- [Transports](/docs/transports) — transport-specific retry and DLQ configuration
+- [Testing](/docs/guides/testing) — test error handling scenarios with the InProcess transport

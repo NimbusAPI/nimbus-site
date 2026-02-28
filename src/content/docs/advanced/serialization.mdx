@@ -1,0 +1,210 @@
+---
+title: "Serialization"
+description: "Configure message serialization in Nimbus using the built-in JSON serializer or a custom implementation"
+category: "advanced"
+order: 2
+---
+
+import Callout from '@components/ui/Callout.astro';
+
+## Overview
+
+Nimbus serializes messages before sending them to the transport and deserializes them on receipt. The serialization format must be consistent across all services that share a message contract — they all need to serialize and deserialize the same bytes.
+
+## Default Serializer
+
+By default, Nimbus uses .NET's `DataContractSerializer`. This is a binary-compatible, type-safe serializer that requires message classes to be annotated:
+
+```csharp
+using System.Runtime.Serialization;
+
+[DataContract]
+public class PlaceOrderCommand : IBusCommand
+{
+    [DataMember]
+    public string OrderId { get; set; }
+
+    [DataMember]
+    public decimal TotalAmount { get; set; }
+
+    [DataMember]
+    public List<OrderItem> Items { get; set; }
+}
+```
+
+<Callout type="info">
+The DataContract serializer is fast and precise, but requires explicit `[DataContract]` and `[DataMember]` attributes on all message types. If you prefer schema-free serialization, use the JSON serializer instead.
+</Callout>
+
+## JSON Serialization
+
+The `Nimbus.Serializers.Json` package provides JSON serialization using Newtonsoft.Json. This is more flexible — no attributes required — and produces human-readable messages that are easier to debug.
+
+### Install
+
+```bash
+dotnet add package Nimbus.Serializers.Json
+```
+
+### Configure
+
+```csharp
+using Nimbus.Serializers.Json;
+
+var bus = new BusBuilder()
+    .Configure()
+    .WithTransport(transport)
+    .WithNames("OrderService", Environment.MachineName)
+    .WithTypesFrom(typeProvider)
+    .WithAutofacDefaults(container)
+    .WithJsonSerializer()   // ← enable JSON
+    .Build();
+```
+
+With JSON serialization, your message classes need no special attributes:
+
+```csharp
+public class PlaceOrderCommand : IBusCommand
+{
+    public string OrderId { get; set; }
+    public decimal TotalAmount { get; set; }
+    public List<OrderItem> Items { get; set; }
+}
+```
+
+## Custom Serializer
+
+Implement `ISerializer` to use any serialization format you like:
+
+```csharp
+using Nimbus.InfrastructureContracts;
+
+public class MyCustomSerializer : ISerializer
+{
+    public string Serialize(object serializableObject)
+    {
+        // Convert the object to a string representation
+        return MySerializationLibrary.Serialize(serializableObject);
+    }
+
+    public object Deserialize(string serializedObject, Type type)
+    {
+        // Reconstruct the object from its string representation
+        return MySerializationLibrary.Deserialize(serializedObject, type);
+    }
+}
+```
+
+Register it on the bus:
+
+```csharp
+var bus = new BusBuilder()
+    .Configure()
+    .WithTransport(transport)
+    .WithSerializer(new MyCustomSerializer())
+    .Build();
+```
+
+## Serialization Considerations
+
+### Schema Evolution
+
+When you change a message contract, existing messages in queues still use the old schema. Plan carefully for backwards compatibility:
+
+**Safe changes (backwards compatible):**
+```csharp
+// Adding a new optional property — old messages will have null/default
+public class PlaceOrderCommand : IBusCommand
+{
+    public string OrderId { get; set; }
+    public decimal TotalAmount { get; set; }
+    public string PromoCode { get; set; }  // ← New field, safe to add
+}
+```
+
+**Breaking changes (avoid in production):**
+```csharp
+// ❌ Renaming a property breaks deserialization of existing messages
+public class PlaceOrderCommand : IBusCommand
+{
+    public string Id { get; set; }          // Was: OrderId
+    public decimal Amount { get; set; }     // Was: TotalAmount
+}
+```
+
+<Callout type="warning">
+When deploying new versions, drain queues before removing or renaming fields in message contracts. Or use a versioning strategy where old and new handlers co-exist during rollout.
+</Callout>
+
+### Type Fidelity
+
+The JSON serializer serializes to/from concrete types, which means polymorphism needs careful handling:
+
+```csharp
+// ✅ Keep message contracts as simple POCOs
+public class ShipOrderCommand : IBusCommand
+{
+    public string OrderId { get; set; }
+    public string ShippingMethod { get; set; }  // Use a string/enum, not a base type
+}
+
+// ❌ Avoid polymorphic properties in message contracts
+public class ShipOrderCommand : IBusCommand
+{
+    public IShippingMethod ShippingMethod { get; set; }  // Can't reliably deserialize
+}
+```
+
+### Message Size
+
+Serialized message size matters — transports enforce limits:
+
+| Transport | Typical Limit |
+|-----------|--------------|
+| Azure Service Bus | 256 KB (standard), 1 MB (premium) |
+| Redis | 512 MB (configurable) |
+| AMQP | Broker-dependent |
+| In-Process | Unlimited |
+
+For messages that exceed size limits, use [Large Messages](/docs/advanced/large-messages) with Azure Blob Storage offloading.
+
+### Performance
+
+DataContract serializer is generally faster, JSON serializer produces smaller, more readable output:
+
+```
+DataContract: Fast, binary-ish, requires attributes
+JSON:         Slightly slower, human-readable, schema-free
+Custom:       Whatever your implementation provides
+```
+
+For most applications the difference is negligible. Use JSON serialization unless you have a specific performance requirement.
+
+## Consistent Serialization
+
+**All services sharing a message contract must use the same serializer.** If Service A sends a JSON-serialized command and Service B tries to deserialize it with DataContract, it will fail.
+
+```csharp
+// ✅ Both services use the same serializer
+// OrderService (sender)
+busBuilder.WithJsonSerializer();
+
+// InventoryService (handler)
+busBuilder.WithJsonSerializer();
+
+// ❌ Mismatched — Service B will fail to deserialize Service A's messages
+// OrderService (sender)
+busBuilder.WithJsonSerializer();
+
+// InventoryService (handler)
+busBuilder.Configure(); // DataContract by default
+```
+
+<Callout type="tip">
+Extract your bus configuration into a shared library so all services use consistent settings. This prevents serializer mismatches and other configuration drift.
+</Callout>
+
+## Next Steps
+
+- [Large Messages](/docs/advanced/large-messages) — handle messages exceeding transport size limits
+- [Configuration](/docs/getting-started/configuration) — full bus configuration reference
