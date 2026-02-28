@@ -1,0 +1,63 @@
+---
+title: "Using Nimbus with AI Coding Agents"
+description: "A machine-readable reference for AI coding agents and LLMs working with Nimbus"
+category: "guides"
+order: 5
+---
+
+import Callout from '@components/ui/Callout.astro';
+
+Nimbus provides an `llms.txt` file — a single markdown document containing everything an AI coding agent needs to integrate with Nimbus: message patterns, bus setup, transport configuration, and handler examples.
+
+## What is llms.txt?
+
+`llms.txt` is a [proposed standard](https://llmstxt.org) for giving AI tools a concise, structured reference for a project. Rather than asking an agent to scrape multiple documentation pages, you point it at one file that contains the essential API surface in a format optimised for language models.
+
+## The File
+
+Nimbus's `llms.txt` is available at:
+
+**[https://nimbusapi.com/llms.txt](https://nimbusapi.com/llms.txt)**
+
+It covers:
+
+- All four message patterns (commands, competing events, multicast events, request/response)
+- Full bus setup with Autofac
+- Transport configuration for every supported transport
+- Handler registration and design guidance
+- Key namespaces and interfaces
+
+## Using it with Claude Code
+
+Add this to your `CLAUDE.md` file at the root of your project:
+
+```markdown
+## Messaging
+
+This project uses Nimbus for messaging. Before implementing any messaging features,
+fetch the reference: https://nimbusapi.com/llms.txt
+```
+
+Or reference it directly in a prompt:
+
+```
+Read https://nimbusapi.com/llms.txt then add a PlaceOrderCommand handler that saves the order to the database.
+```
+
+## Using it with Cursor
+
+Add it to `.cursorrules` or reference it in a prompt. Cursor's `@Web` feature can fetch it directly:
+
+```
+@Web https://nimbusapi.com/llms.txt
+
+Add an event handler for OrderPlacedEvent that sends a confirmation email.
+```
+
+## Using it with GitHub Copilot
+
+Paste the contents of `llms.txt` into a chat session before asking Copilot to write Nimbus code. Copilot Chat can also fetch URLs directly in some configurations.
+
+<Callout type="tip">
+For teams using Nimbus across multiple repositories, add the `llms.txt` URL to your shared `CLAUDE.md` or equivalent agent configuration file so every developer's AI tools have the reference automatically.
+</Callout>

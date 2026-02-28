@@ -54,6 +54,7 @@ export const docsNavigation = [
       { title: 'Logging', slug: 'guides/logging' },
       { title: 'Testing', slug: 'guides/testing' },
       { title: 'Contributing', slug: 'guides/contributing' },
+      { title: 'Using with AI Agents', slug: 'guides/llms-txt' },
     ],
   },
   {
