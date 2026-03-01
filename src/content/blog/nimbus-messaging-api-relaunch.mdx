@@ -1,0 +1,62 @@
+---
+title: The Nimbus Messaging API Is Back
+publishDate: 2026-03-01
+image: /posts/2026/images/nimbus.png
+description: An open source library I started in 2013 has been quietly running in production for 13 years, handling millions and millions of transactions. But as of today, it's out of the shadows and back into the spotlight.
+author: "Damian Maclennan"
+tags: ["announcement", "introduction"]
+bluesky_post:
+draft: false
+---
+
+
+An open source library I started in 2013 has been quietly running in production for 13 years, handling millions and millions of transactions. But as of today, it's out of the shadows and back into the spotlight.
+
+Nimbus is a transport agnostic messaging library that provides a nice abstraction over messaging infrastructure, so you can get on with writing code and worrying less about plumbing like queue topologies, connection management, and retrying failures.
+
+## History
+
+I began working with messaging based architectures in 2009 working with MSMQ. Not long after that, with some colleagues at Readify (the sadly now defunct consultancy), we used async and messaging architecture as to great success. We had a solve a lot of client problems where fault tolerance was a huge concern in distributed environments, or legacy systems were involved, and we developed a lot of skill in the space. We worked with [NServiceBus](https://particular.net/nservicebus), [MassTransit](https://masstransit.io/), [Rebus](https://rebus.fm/what-is-rebus/), and several of our own hand-rolled solutions along the way.
+
+Being a Microsoft based consultancy, we started seeing opportunities for Azure Service Bus and Windows Service Bus. At that time none of the other messaging libraries supported these products. so in 2013 [myself](https://damianm.com/) and [Andrew Harcourt](https://andrewharcourt.com/) sat down one afternoon and broke ground on a new library we called Nimbus (cloud bus, get it?).
+
+The platforms and client libraries had a few sharp edges and weird behaviours, so having a nice abstraction for it made building apps much easier. And as a result, Nimbus got some great early traction, a number of community contributions, and was used in a lot of fairly significant applications.
+
+It was always designed to be infrastructure agnostic, and along the way we added a Redis transport for it for ultra high throughput messaging.
+
+## The lost years
+
+Due to a number of circumstances, we both moved in to other companies and roles. For a few years we were either in leadership roles and "off the tools", or working hard on software where Nimbus wasn't a fit. With no real need for Nimbus ourselves, it got neglected. A few folks took private forks to maintain it themselves, but we didn't keep up with dotnet core rolled around and people moved on.
+
+It had always weighed on me that we'd built something so good, but didn't have the ability to help it succeed.
+
+## Quiet Rebuild
+In 2018 I did a dotnet core port for some of my projects and kept tinkering with it on a couple of things. I got it working and brought it up to date. All that was left to do was re-vamp the documentation, which always seemed to be low on my list.
+
+In 2020 I worked on a very large system that needed a whole lot of fault tolerance and async data processing, on Azure, so it went back into production in a big way. Some bugs were fixed and it got some serious battle testing. But I wasn't in a place to support a proper release.
+
+In 2022 and 2023 it went into production with some other companies, and as I started teaching workshops on microservices and distributed architecture it became a great teaching tool. It lets you build the apps without getting caught in the weeds of configuring infrastructure.
+
+But it wasn't documented well, so it was technically unsupported and nobody could really use it without me around. 
+
+## The Relaunch
+
+With all this, I've wanted to do a proper relaunch for ages. There was just a long list of things I wanted to do. I wanted other infrastructure options than Azure or Redis. I've wanted an ActiveMQ one for the longest of times, and I've had several projects where I wanted the developer experience but really only had a database as a backend. Plus I still had that documentation issue, and a bunch of tech debt around how to make the integration testing experience better, and the build and release process easier.
+
+After being on the [YOW!](https://yowcon.com) roadshow, and being around a bunch of amazing builders and thinkers for two weeks in December 2025 I got fired up. Since I got home I've spent a whole lot of time building, testing, learning, and most importantly writing, to get through my long todo list and bring Nimbus back into the world properly in 2026.
+
+Nimbus now gives you the great developer experience, with your choice of Azure Service Bus, Redis, AMQP (Active MQ Artemis), SQL Server, and Postgres. I have a few more options planned too. I have a full suite of documentation and guides on the website, and a much saner build, test, and release process. It's all open source, but to save myself from totally burning out (and give companies some peace of mind) I will be offering commercial support.
+
+I'm also testing something which is an [llms.txt](/docs/guides/llms-txt/) file on the website. If you follow the instructions to point your coding agent of choice at the file, you get the documentation condensed and sent directly to your context.
+
+## What's Next
+
+So as of March 2026, Nimbus is back, supported, documented, and around to stay. I'll be getting along to some meetups to talk about it in the next few months, so if you'd like to have me speak then please [get in touch](http://damianm.com/contact/). 
+
+## What you can do
+
+Are you building or planning an Event Driven architecture? It definitely should be on your list to consider. Whether it's greenfield services, or if you're trying to break up a legacy system and need some "glue".
+Go check out the [documentation](/docs/getting-started), the [code on GitHub](https://github.com/NimbusAPI/Nimbus), or the sample apps.
+
+
+If you're looking for deeper guidance, training, or commercial support, [it's available here](https://damianm.com/).
