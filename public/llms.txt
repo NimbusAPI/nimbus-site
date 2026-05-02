@@ -54,6 +54,10 @@ var typeProvider = new AssemblyScanningTypeProvider(
 );
 
 // 3. Build and start the bus (singleton — one per process)
+// BusBuilder.Configure() returns BusBuilderConfiguration.
+// Build() returns the concrete Nimbus.Bus class (not IBus) — register it as both
+// AsSelf() and As<IBus>() so lifecycle code can call Start()/Stop() while
+// handlers inject IBus for sending.
 var bus = new BusBuilder()
     .Configure()
     .WithNames("MyService", Environment.MachineName)
@@ -61,6 +65,7 @@ var bus = new BusBuilder()
         .WithConnectionString("localhost:6379"))
     .WithTypesFrom(typeProvider)
     .WithAutofacDefaults(container.BeginLifetimeScope())
+    .WithJsonSerializer()
     .Build();
 
 await bus.Start();
@@ -261,8 +266,11 @@ builder.RegisterType<PlaceOrderHandler>().AsImplementedInterfaces();
 | Namespace | Contents |
 |---|---|
 | `Nimbus.MessageContracts` | `IBusCommand`, `IBusEvent`, `IMulticastEvent`, `IBusRequest<,>` |
-| `Nimbus.Handlers` | `IHandleCommand<>`, `IHandleCompetingEvent<>`, `IHandleMulticastEvent<>`, `IHandleRequest<,>` |
-| `Nimbus.Configuration` | `BusBuilder`, `AssemblyScanningTypeProvider` |
+| `Nimbus.InfrastructureContracts` | `IBus` |
+| `Nimbus.InfrastructureContracts.Handlers` | `IHandleCommand<>`, `IHandleCompetingEvent<>`, `IHandleMulticastEvent<>`, `IHandleRequest<,>` |
+| `Nimbus.Configuration` | `BusBuilder`, `BusBuilderConfiguration` |
+| `Nimbus.Infrastructure` | `AssemblyScanningTypeProvider` |
+| `Nimbus.Serializers.Json.Configuration` | `WithJsonSerializer()` extension |
 | `Nimbus.Transports.Redis` | `RedisTransportConfiguration` |
 | `Nimbus.Transports.AzureServiceBus` | `AzureServiceBusTransportConfiguration` |
 | `Nimbus.Transports.AMQP` | `AMQPTransportConfiguration` |
