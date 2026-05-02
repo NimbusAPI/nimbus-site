@@ -1,0 +1,40 @@
+---
+title: New Transport — NATS
+publishDate: 2026-05-02
+description: Nimbus now supports NATS as a messaging transport, with both standard pub/sub and JetStream persistence modes.
+author: "Damian Maclennan"
+tags: ["announcement", "transports", "nats"]
+
+---
+
+Nimbus has a new transport: [NATS](https://nats.io).
+
+NATS is a lightweight, high-performance messaging system. It's a single binary with no external dependencies, easy to run locally or deploy in production, and fast — comfortably handling hundreds of thousands of messages per second.
+
+## Two modes
+
+The transport supports NATS in two modes.
+
+**Standard mode** uses core NATS pub/sub. Messages are held in memory and delivered immediately. There's no persistence — if the server restarts, in-flight messages are gone. It's the right choice when you want maximum throughput and don't need durability.
+
+**JetStream mode** adds persistence to NATS. Messages are written to disk, acknowledged on delivery, and survive broker restarts. If you're running NATS in production and need reliability guarantees, use JetStream.
+
+## Getting started
+
+```bash
+dotnet add package Nimbus.Transports.Nats
+```
+
+```csharp
+// Standard
+var transport = new NatsTransportConfiguration()
+    .WithUrl("nats://localhost:4222");
+
+// JetStream (start NATS with -js flag)
+var transport = new NatsTransportConfiguration()
+    .WithUrl("nats://localhost:4222")
+    .WithJetStream();
+```
+
+NATS supports username/password, token, NKey, and credentials file authentication — see the [NATS transport docs](/docs/transports/nats) for the full configuration reference.
+

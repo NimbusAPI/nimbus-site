@@ -1,0 +1,153 @@
+---
+title: "NATS"
+description: "Use Nimbus with NATS for ultra-fast, cloud-native messaging with optional JetStream persistence"
+category: "transports"
+order: 5
+---
+
+import Callout from '@components/ui/Callout.astro';
+
+The Nimbus NATS transport connects to a NATS server, delivering ultra-high-performance messaging with minimal overhead. It supports two operating modes: **standard mode** using core NATS pub/sub, and **JetStream mode** for persistent, durable messaging with delivery guarantees. Standard mode prioritises raw throughput; JetStream mode adds persistence, replay, and acknowledgements.
+
+## Installation
+
+```bash
+dotnet add package Nimbus.Transports.Nats
+```
+
+## Quick Start
+
+### Run NATS
+
+```bash
+docker run -d \
+  --name nats \
+  -p 4222:4222 \
+  -p 8222:8222 \
+  nats:latest
+```
+
+The NATS monitoring dashboard is available at http://localhost:8222.
+
+### Configure Nimbus
+
+```csharp
+using Nimbus;
+using Nimbus.Configuration;
+using Nimbus.Transports.Nats;
+
+var bus = new BusBuilder()
+    .Configure()
+    .WithNames("OrderService", Environment.MachineName)
+    .WithTransport(new NatsTransportConfiguration()
+        .WithUrl("nats://localhost:4222"))
+    .WithTypesFrom(typeProvider)
+    .WithAutofacDefaults(container)
+    .Build();
+
+await bus.Start();
+```
+
+Or use the convenience extension method:
+
+```csharp
+var bus = new BusBuilder()
+    .Configure()
+    .WithNames("OrderService", Environment.MachineName)
+    .WithNatsTransport("nats://localhost:4222")
+    .WithTypesFrom(typeProvider)
+    .WithAutofacDefaults(container)
+    .Build();
+
+await bus.Start();
+```
+
+## JetStream Mode
+
+JetStream gives NATS durable persistence, acknowledgements, and message replay. Enable it by passing `-js` to the NATS server and calling `.WithJetStream()` in your configuration:
+
+```bash
+# Run NATS with JetStream enabled
+docker run -d \
+  --name nats \
+  -p 4222:4222 \
+  -p 8222:8222 \
+  nats:latest \
+  -js
+```
+
+```csharp
+var bus = new BusBuilder()
+    .Configure()
+    .WithNames("OrderService", Environment.MachineName)
+    .WithTransport(new NatsTransportConfiguration()
+        .WithUrl("nats://localhost:4222")
+        .WithJetStream())
+    .WithTypesFrom(typeProvider)
+    .WithAutofacDefaults(container)
+    .Build();
+
+await bus.Start();
+```
+
+<Callout type="tip">
+Use JetStream mode for production workloads where message durability and guaranteed delivery are required. Standard mode suits fire-and-forget scenarios where raw throughput takes priority over persistence.
+</Callout>
+
+## Authentication
+
+NATS supports several authentication methods. Choose the one that matches your server configuration:
+
+### Username and Password
+
+```csharp
+new NatsTransportConfiguration()
+    .WithUrl("nats://localhost:4222")
+    .WithCredentials("username", "password")
+```
+
+### Token Authentication
+
+```csharp
+new NatsTransportConfiguration()
+    .WithUrl("nats://localhost:4222")
+    .WithToken("my-secret-token")
+```
+
+### NKey Authentication
+
+```csharp
+new NatsTransportConfiguration()
+    .WithUrl("nats://localhost:4222")
+    .WithNKey("SUANQDPB...")  // NKey seed
+```
+
+### Credentials File
+
+```csharp
+new NatsTransportConfiguration()
+    .WithUrl("nats://localhost:4222")
+    .WithCredentialsFile("/path/to/credentials.creds")
+```
+
+## Scheduled Delivery
+
+Both standard and JetStream modes support scheduled message delivery:
+
+```csharp
+// Deliver after a delay
+await bus.SendAfter(new MyCommand(), TimeSpan.FromMinutes(5));
+
+// Deliver at a specific time
+await bus.SendAt(new MyCommand(), DateTimeOffset.UtcNow.AddHours(1));
+```
+
+## Limitations
+
+- Large message support is not available. Keep message payloads under 1 MB — the NATS server's default maximum payload size.
+
+## Compatibility
+
+- ✅ **NATS Server 2.x+** (required)
+- ✅ **JetStream** (requires NATS Server 2.2+)
+- ✅ **.NET 9.0+**

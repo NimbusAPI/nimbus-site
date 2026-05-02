@@ -48,6 +48,18 @@ Nimbus supports multiple messaging transports, each with different characteristi
     [Learn more →](/docs/transports/amqp)
   </Card>
 
+  <Card title="NATS" icon="🚀">
+    **Ultra-fast** cloud-native messaging with optional JetStream persistence.
+
+    - Extremely fast, minimal overhead
+    - Simple single-binary deployment
+    - Optional JetStream mode for durability
+    - Rich authentication options
+    - Great for high-throughput microservices
+
+    [Learn more →](/docs/transports/nats)
+  </Card>
+
   <Card title="SQL Server" icon="🗄️">
     **Database-backed** transport using your existing SQL Server instance.
 
@@ -84,16 +96,16 @@ Nimbus supports multiple messaging transports, each with different characteristi
 
 ## Transport Comparison
 
-| Feature | Azure Service Bus | Redis | AMQP | SQL Server | PostgreSQL | In-Process |
-|---------|------------------|-------|------|------------|------------|------------|
-| **Deployment** | Cloud (Azure) | Self-hosted or Cloud | Self-hosted | Existing DB | Existing DB | N/A |
-| **Extra infra required** | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
-| **Durability** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐ |
-| **Performance** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐⭐⭐ |
-| **Setup Complexity** | ⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ |
-| **Cost** | Pay per use | Free (self-host) | Free (self-host) | Existing DB cost | Existing DB cost | Free |
-| **Message delivery** | Push | Push | Push | Polling | Polling | In-memory |
-| **Message Size** | 256KB / 1MB | 512MB | 100MB+ | VARBINARY(MAX) | BYTEA | Unlimited |
+| Feature | Azure Service Bus | Redis | AMQP | NATS | SQL Server | PostgreSQL | In-Process |
+|---------|------------------|-------|------|------|------------|------------|------------|
+| **Deployment** | Cloud (Azure) | Self-hosted or Cloud | Self-hosted | Self-hosted or Cloud | Existing DB | Existing DB | N/A |
+| **Extra infra required** | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **Durability** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐ / ⭐⭐⭐⭐ (JetStream) | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐ |
+| **Performance** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐⭐⭐ |
+| **Setup Complexity** | ⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ |
+| **Cost** | Pay per use | Free (self-host) | Free (self-host) | Free (self-host) | Existing DB cost | Existing DB cost | Free |
+| **Message delivery** | Push | Push | Push | Push | Polling | Polling | In-memory |
+| **Message Size** | 256KB / 1MB | 512MB | 100MB+ | 1MB (default) | VARBINARY(MAX) | BYTEA | Unlimited |
 
 ## Choosing a Transport
 
@@ -143,6 +155,21 @@ var transport = new AMQPTransportConfiguration()
     .WithBrokerUri("amqp://localhost:5672")
     .WithCredentials("admin", "admin")
     .WithConnectionPoolSize(10);
+```
+</CodeBlock>
+
+**NATS** if you:
+- Need maximum throughput with minimal latency
+- Want a lightweight, easy-to-operate broker
+- Are building cloud-native or microservice architectures
+- Can use JetStream for durability when needed
+- Prefer a modern alternative to heavier brokers
+
+<CodeBlock title="Configure NATS Transport">
+```csharp
+var transport = new NatsTransportConfiguration()
+    .WithUrl("nats://localhost:4222")
+    .WithJetStream();  // optional, for durable messaging
 ```
 </CodeBlock>
 
@@ -196,26 +223,26 @@ var transport = new InProcessTransportConfiguration();
 
 ### Core Features
 
-| Feature | Azure Service Bus | Redis | AMQP | SQL Server | PostgreSQL | In-Process |
-|---------|------------------|-------|------|------------|------------|------------|
-| Commands | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Events (Competing) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Events (Multicast) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Requests | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Multicast Requests | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Feature | Azure Service Bus | Redis | AMQP | NATS | SQL Server | PostgreSQL | In-Process |
+|---------|------------------|-------|------|------|------------|------------|------------|
+| Commands | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Events (Competing) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Events (Multicast) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Requests | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Multicast Requests | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ### Advanced Features
 
-| Feature | Azure Service Bus | Redis | AMQP | SQL Server | PostgreSQL | In-Process |
-|---------|------------------|-------|------|------------|------------|------------|
-| **Scheduled Delivery** | ✅ Native | ⚠️ Polling | ✅ Native | ✅ `visible_after` | ✅ `visible_after` | ✅ Full support |
-| **Message TTL** | ✅ Native | ✅ Native | ✅ Native | ✅ `expires_at` | ✅ `expires_at` | ✅ Simulated |
-| **Dead Letter Queue** | ✅ Native | ⚠️ Manual | ✅ Native | ✅ DB table | ✅ DB table | ⚠️ Manual |
-| **Large Messages** | ✅ Blob store | ❌ | ✅ Blob store | ❌ | ❌ | ✅ |
-| **Transactions** | ✅ Full support | ⚠️ Limited | ✅ Full support | ❌ | ❌ | ✅ |
-| **Sessions** | ✅ Full support | ❌ | ✅ Full support | ❌ | ❌ | ❌ |
-| **Duplicate Detection** | ✅ Native | ⚠️ Manual | ⚠️ Manual | ⚠️ Manual | ⚠️ Manual | ⚠️ Manual |
-| **Encryption at rest** | ✅ Native | ⚠️ Manual | ⚠️ Manual | ✅ TDE | ✅ Native | ❌ |
+| Feature | Azure Service Bus | Redis | AMQP | NATS | SQL Server | PostgreSQL | In-Process |
+|---------|------------------|-------|------|------|------------|------------|------------|
+| **Scheduled Delivery** | ✅ Native | ⚠️ Polling | ✅ Native | ✅ Simulated | ✅ `visible_after` | ✅ `visible_after` | ✅ Full support |
+| **Message TTL** | ✅ Native | ✅ Native | ✅ Native | ✅ JetStream | ✅ `expires_at` | ✅ `expires_at` | ✅ Simulated |
+| **Dead Letter Queue** | ✅ Native | ⚠️ Manual | ✅ Native | ✅ | ✅ DB table | ✅ DB table | ⚠️ Manual |
+| **Large Messages** | ✅ Blob store | ❌ | ✅ Blob store | ❌ | ❌ | ❌ | ✅ |
+| **Transactions** | ✅ Full support | ⚠️ Limited | ✅ Full support | ❌ | ❌ | ❌ | ✅ |
+| **Sessions** | ✅ Full support | ❌ | ✅ Full support | ❌ | ❌ | ❌ | ❌ |
+| **Duplicate Detection** | ✅ Native | ⚠️ Manual | ⚠️ Manual | ⚠️ Manual | ⚠️ Manual | ⚠️ Manual | ⚠️ Manual |
+| **Encryption at rest** | ✅ Native | ⚠️ Manual | ⚠️ Manual | ⚠️ Manual | ✅ TDE | ✅ Native | ❌ |
 
 ## Performance Characteristics
 
@@ -223,6 +250,7 @@ var transport = new InProcessTransportConfiguration();
 
 **High Throughput** (10,000+ msgs/sec):
 - Redis (in-memory, minimal overhead)
+- NATS (lightweight protocol, minimal broker overhead)
 - In-Process (no serialization or network)
 
 **Medium-High Throughput** (1,000-10,000 msgs/sec):
@@ -241,6 +269,7 @@ var transport = new InProcessTransportConfiguration();
 
 **Low** (1-10ms):
 - Redis
+- NATS
 
 **Medium** (10-50ms):
 - Azure Service Bus
@@ -270,6 +299,11 @@ var transport = new InProcessTransportConfiguration();
 - Default: 100 MB (configurable)
 - Broker-dependent limits
 - Large message support available
+
+### NATS
+- Default max payload: 1 MB (configurable on the server)
+- No external large message store support
+- Keep messages small for best performance
 
 ### SQL Server
 - `VARBINARY(MAX)`: up to 2 GB per message
@@ -338,6 +372,11 @@ public class IdempotentPlaceOrderHandler : IHandleCommand<PlaceOrderCommand>
 - Durable subscriptions available
 - Survives broker restarts with proper configuration
 
+**NATS**:
+- Standard mode: messages held in memory, not persisted across restarts
+- JetStream mode: persistent streams stored on disk, survives broker restarts
+- Use JetStream for any workload where message loss is not acceptable
+
 **SQL Server**:
 - Full ACID durability — messages stored in database tables
 - Survives application restarts and server reboots
@@ -372,6 +411,11 @@ public class IdempotentPlaceOrderHandler : IHandleCommand<PlaceOrderCommand>
 - Web console included
 - Management API available
 
+**NATS**:
+- HTTP monitoring endpoint at port 8222
+- NATS CLI (`nats`) for real-time stats and stream inspection
+- Prometheus exporter available
+
 **SQL Server / PostgreSQL**:
 - Query `nimbus_messages` / `NimbusMessages` for queue depths
 - Query `nimbus_dead_letters` / `NimbusDeadLetters` for failure counts
@@ -392,6 +436,7 @@ public class IdempotentPlaceOrderHandler : IHandleCommand<PlaceOrderCommand>
 - **Azure Service Bus**: Upgrade to premium tier
 - **Redis**: Use Redis Cluster
 - **AMQP**: Clustering and failover
+- **NATS**: Use NATS Cluster or JetStream clustering
 - **SQL Server / PostgreSQL**: Scale up the database; reduce poll interval for lower latency
 - **In-Process**: Add more threads (limited)
 
@@ -411,6 +456,11 @@ public class IdempotentPlaceOrderHandler : IHandleCommand<PlaceOrderCommand>
 - Master-slave configuration
 - Clustering support
 - Manual setup and maintenance
+
+**NATS**:
+- NATS Cluster for HA (3+ nodes recommended)
+- JetStream clustering for persistent stream replication
+- Leaf nodes for multi-region topologies
 
 **SQL Server**:
 - Always On Availability Groups, failover cluster instances
@@ -440,6 +490,11 @@ public class IdempotentPlaceOrderHandler : IHandleCommand<PlaceOrderCommand>
 ### AMQP (ActiveMQ Artemis)
 - **Self-hosted**: Server and maintenance costs
 - **Best for**: On-premises deployments, full control requirements, open standards
+
+### NATS
+- **Self-hosted**: Server costs only (single binary, very lightweight)
+- **Managed (Synadia Cloud)**: Pricing varies by usage
+- **Best for**: High-throughput microservices, cloud-native applications
 
 ### SQL Server
 - **Self-hosted**: No additional cost beyond existing SQL Server licence
@@ -532,6 +587,20 @@ var transport = new AMQPTransportConfiguration()
 ```
 
 [Full guide →](/docs/transports/amqp)
+
+### NATS
+
+```bash
+dotnet add package Nimbus.Transports.Nats
+```
+
+```csharp
+var transport = new NatsTransportConfiguration()
+    .WithUrl("nats://localhost:4222")
+    .WithJetStream();  // optional
+```
+
+[Full guide →](/docs/transports/nats)
 
 ### SQL Server
 

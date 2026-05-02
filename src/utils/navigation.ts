@@ -33,6 +33,7 @@ export const docsNavigation = [
       { title: 'Azure Service Bus', slug: 'transports/azure-service-bus' },
       { title: 'Redis', slug: 'transports/redis' },
       { title: 'AMQP', slug: 'transports/amqp' },
+      { title: 'NATS', slug: 'transports/nats' },
       { title: 'SQL Server', slug: 'transports/sql-server' },
       { title: 'PostgreSQL', slug: 'transports/postgres' },
       { title: 'In-Process', slug: 'transports/in-process' },
