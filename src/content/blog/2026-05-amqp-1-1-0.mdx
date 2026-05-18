@@ -1,0 +1,29 @@
+---
+title: AMQP Transport 1.1.0
+publishDate: 2026-05-19
+description: A significant throughput improvement to the AMQP transport, driven by connection pooling optimisations found during benchmarking.
+author: "Damian Maclennan"
+tags: ["releases", "transports", "amqp", "performance"]
+---
+
+Version 1.1.0 of the AMQP transport is out with a meaningful throughput improvement.
+
+## What changed
+
+While benchmarking all the Nimbus transports, I noticed the AMQP transport was leaving a lot of performance on the table. The bottleneck turned out to be connection pooling for message senders. Each sender was not reusing connections as it should, which added overhead at any reasonable message volume.
+
+1.1.0 fixes this. Senders now pool connections properly, which removes most of that overhead and lets the underlying broker do its job without the client getting in the way.
+
+## Upgrading
+
+```bash
+dotnet add package Nimbus.Transports.AMQP --version 1.1.0
+```
+
+No configuration changes are required. The connection pooling improvement is automatic.
+
+## How it compares
+
+The benchmark work was useful beyond just this fix — it gave a clearer picture of where each transport sits relative to the others. The AMQP transport is now competitive with what you'd expect from a well-tuned Artemis setup.
+
+Full transport comparison is on the [transports overview page](/docs/transports).
