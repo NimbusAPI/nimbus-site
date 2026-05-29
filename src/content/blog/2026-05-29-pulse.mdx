@@ -1,0 +1,51 @@
+---
+title: "Nimbus.Extensions.Pulse - Scheduled Messages"
+publishDate: 2026-05-29
+description: Fire commands and events on a cron schedule, built into the bus lifecycle — no separate scheduler process required.
+author: "Damian Maclennan"
+tags: ["announcement", "extensions", "pulse"]
+---
+
+Nimbus has a new extension: `Nimbus.Extensions.Pulse`.
+
+Pulse fires commands and events on a cron schedule. It's for the recurring background work that every application ends up needing - hourly reports, health checks, cache warming, cleanup jobs - without wiring up a separate scheduler or timer process.
+
+## How it works
+
+Add `.WithPulse(...)` to your bus builder with one or more `(cronExpression, message)` tuples:
+
+```csharp
+var bus = new BusBuilder()
+    .Configure()
+    .WithTransport(...)
+    .WithNames("MyApp", Environment.MachineName)
+    .WithTypesFrom(typeProvider)
+    .WithPulse(
+        ("0 * * * *",   new HourlyReportCommand()),
+        ("*/5 * * * *", new HealthCheckEvent())
+    )
+    .Build();
+```
+
+The message type determines how it's delivered. Commands go via `bus.Send()` (single competing consumer); events via `bus.Publish()` (all subscribers). The pulse engine starts and stops with the bus.
+
+## Knowing when you fired
+
+If your handler needs the scheduled time, implement `IPulseMessage`:
+
+```csharp
+public class HourlyReportCommand : IBusCommand, IPulseMessage
+{
+    public DateTimeOffset PulseTime { get; set; }
+}
+```
+
+`PulseTime` is set to the nominal scheduled occurrence - the time the pulse *should* have fired, not the actual wall-clock time. That makes it safe to use for idempotency checks or log correlation without worrying about jitter.
+
+## Get it
+
+```bash
+dotnet add package Nimbus.Extensions.Pulse
+```
+
+See the [full documentation](/docs/advanced/pulse) for cron expression examples and multi-instance deployment notes.
