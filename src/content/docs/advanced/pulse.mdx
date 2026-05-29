@@ -1,0 +1,104 @@
+---
+title: "Pulse — Scheduled Messages"
+description: "Fire commands and events on cron-scheduled intervals using Nimbus.Extensions.Pulse"
+category: "advanced"
+order: 5
+---
+
+import Callout from '@components/ui/Callout.astro';
+
+## Overview
+
+`Nimbus.Extensions.Pulse` fires commands and events on cron-scheduled intervals. It is designed for recurring background work — hourly reports, health checks, cache warming, cleanup tasks — without needing a separate scheduler process.
+
+The pulse engine starts and stops with the bus lifecycle, so there is nothing extra to manage.
+
+## Installation
+
+```bash
+dotnet add package Nimbus.Extensions.Pulse
+```
+
+## Configuration
+
+Add `.WithPulse(...)` to your bus builder chain, passing one or more `(cronExpression, message)` tuples. It must come after all other configuration and replaces the final `.Build()` call:
+
+```csharp
+var bus = new BusBuilder()
+    .Configure()
+    .WithTransport(...)
+    .WithNames("MyApp", Environment.MachineName)
+    .WithTypesFrom(typeProvider)
+    .WithPulse(
+        ("0 * * * *",   new HourlyReportCommand()),
+        ("*/5 * * * *", new HealthCheckEvent())
+    )
+    .Build();
+```
+
+Cron expressions use standard 5-field syntax (minute, hour, day-of-month, month, day-of-week), parsed by [Cronos](https://github.com/HangfireIO/Cronos).
+
+Each message must implement either `IBusCommand` or `IBusEvent`. The type is detected automatically:
+
+- **Commands** are dispatched via `bus.Send()` — single competing consumer
+- **Events** are dispatched via `bus.Publish()` — all subscribers receive a copy
+
+## IPulseMessage
+
+If you need the scheduled tick time inside your handler, implement `IPulseMessage` on your message type:
+
+```csharp
+using Nimbus.Extensions.Pulse;
+using Nimbus.MessageContracts;
+
+public class HourlyReportCommand : IBusCommand, IPulseMessage
+{
+    public DateTimeOffset PulseTime { get; set; }
+}
+```
+
+When the pulse fires, `PulseTime` is set to the **nominal scheduled occurrence** from the cron expression — the time it *should* have fired, not the wall-clock time it actually fired. This gives handlers a clean, jitter-free value suitable for idempotency checks, log correlation, or grouping work by time bucket.
+
+```csharp
+public class HourlyReportCommandHandler : IHandleCommand<HourlyReportCommand>
+{
+    public async Task Handle(HourlyReportCommand command)
+    {
+        var reportPeriod = command.PulseTime; // e.g. 2026-05-29T14:00:00+00:00
+        // ...
+    }
+}
+```
+
+<Callout type="tip">
+`IPulseMessage` is optional. Messages that don't implement it are fired normally with no modification.
+</Callout>
+
+## Cron expression reference
+
+| Expression      | Fires                              |
+|-----------------|------------------------------------|
+| `* * * * *`     | Every minute                       |
+| `*/5 * * * *`   | Every 5 minutes                    |
+| `0 * * * *`     | Every hour (on the hour)           |
+| `0 9 * * 1-5`   | 9 AM on weekdays                   |
+| `0 0 * * *`     | Midnight every day                 |
+| `0 0 1 * *`     | Midnight on the 1st of each month  |
+
+## Multi-instance deployments
+
+Each running instance of your application fires its own pulse independently.
+
+For **events** this is usually fine — duplicate publishes are handled by your subscribers as normal competing or multicast consumers.
+
+For **commands**, multiple instances will each enqueue a copy on every tick. If that is undesirable, either ensure only a single instance has Pulse configured, or use a distributed lock within your handler.
+
+<Callout type="warning">
+If you run multiple instances and use commands, each instance enqueues its own copy. Design your handlers to be idempotent, or restrict Pulse to a single instance.
+</Callout>
+
+## Next Steps
+
+- [Commands](/docs/messaging/commands) — how `IBusCommand` and competing consumers work
+- [Events](/docs/messaging/events) — how `IBusEvent` and multicast delivery work
+- [Error Handling](/docs/advanced/error-handling) — dead letter queues and retry policies

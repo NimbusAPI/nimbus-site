@@ -46,6 +46,7 @@ export const docsNavigation = [
       { title: 'Serialization', slug: 'advanced/serialization' },
       { title: 'Large Messages', slug: 'advanced/large-messages' },
       { title: 'Error Handling', slug: 'advanced/error-handling' },
+      { title: 'Pulse — Scheduled Messages', slug: 'advanced/pulse' },
     ],
   },
   {
