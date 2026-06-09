@@ -1,0 +1,28 @@
+---
+title: Redis Transport 4.3.3
+publishDate: 2026-06-09
+description: Redis transport 4.3.3 fixes thread pool starvation that caused intermittent timeouts under load.
+author: "Damian Maclennan"
+tags: ["releases", "transports", "redis"]
+---
+
+4.3.3 of the Redis transport is out, fixing a thread pool starvation issue that was causing intermittent `StackExchange.RedisTimeoutException` under load.
+
+## What changed
+
+The transport polled queues with synchronous LPOP calls. On .NET hosts with a low thread pool minimum (common in containers and single-vCPU deployments), enough concurrent sync calls would saturate the pool. New calls queued up, operations missed their timeout window, and StackExchange.Redis threw:
+
+```
+Timeout performing LPOP (5000ms), inst: 0, qu: 0, qs: 4,
+bw: SpinningDown, sync-ops: 816, async-ops: 0
+```
+
+4.3.3 converts queue polling to the async StackExchange.Redis APIs, which frees up threads during I/O and stops the pool from getting starved.
+
+## Upgrading
+
+```bash
+dotnet add package Nimbus.Transports.Redis --version 4.3.3
+```
+
+No config changes needed.
