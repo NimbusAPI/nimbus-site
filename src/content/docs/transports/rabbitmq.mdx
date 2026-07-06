@@ -1,0 +1,162 @@
+---
+title: "RabbitMQ"
+description: "Use Nimbus with RabbitMQ or LavinMQ for reliable, broker-backed messaging"
+category: "transports"
+order: 5
+---
+
+import Callout from '@components/ui/Callout.astro';
+
+The Nimbus RabbitMQ transport connects to any AMQP 0.9.1 compatible broker using the RabbitMQ.Client v7 async API. It is tested against both **RabbitMQ** and **LavinMQ**, and works with any broker that speaks AMQP 0.9.1.
+
+If you want a widely-adopted, battle-tested message broker with a rich ecosystem, or a lightweight high-performance drop-in alternative, this transport has you covered.
+
+<Callout type="info">
+**Two great options in one transport**: RabbitMQ and LavinMQ both use AMQP 0.9.1 and are configured identically in Nimbus — just point to the right host and port.
+</Callout>
+
+## Installation
+
+```bash
+dotnet add package Nimbus.Transports.RabbitMQ
+```
+
+## Quick Start
+
+### Run RabbitMQ
+
+RabbitMQ requires the `rabbitmq_delayed_message_exchange` community plugin for scheduled message delivery. The easiest way to get this is to extend the official image:
+
+```dockerfile
+FROM rabbitmq:4-management
+RUN rabbitmq-plugins enable rabbitmq_delayed_message_exchange
+```
+
+```bash
+docker build -t rabbitmq-delayed .
+docker run -d \
+  --name rabbitmq \
+  -p 5672:5672 \
+  -p 15672:15672 \
+  -e RABBITMQ_DEFAULT_USER=admin \
+  -e RABBITMQ_DEFAULT_PASS=admin \
+  rabbitmq-delayed
+```
+
+The RabbitMQ management UI is available at http://localhost:15672.
+
+### Configure Nimbus
+
+```csharp
+using Nimbus;
+using Nimbus.Configuration;
+using Nimbus.Transports.RabbitMQ;
+
+var bus = new BusBuilder()
+    .Configure()
+    .WithNames("OrderService", Environment.MachineName)
+    .WithTransport(new RabbitMqTransportConfiguration()
+        .WithHost("localhost")
+        .WithCredentials("admin", "admin"))
+    .WithTypesFrom(typeProvider)
+    .WithAutofacDefaults(container)
+    .Build();
+
+await bus.Start();
+```
+
+## LavinMQ — Lightweight Alternative
+
+[LavinMQ](https://lavinmq.com) is a high-performance, low-resource AMQP 0.9.1 broker written in Crystal. It is fully compatible with the RabbitMQ client protocol and supports delayed messages natively — no plugin required.
+
+LavinMQ is a great fit when you want:
+- A lightweight broker with a tiny memory and CPU footprint
+- Low-latency messaging with RabbitMQ compatibility
+- Simple single-binary deployment
+- Native delayed message support without plugins
+
+### Run LavinMQ
+
+```bash
+docker run -d \
+  --name lavinmq \
+  -p 5672:5672 \
+  -p 15672:15672 \
+  cloudamqp/lavinmq
+```
+
+The LavinMQ management UI is available at http://localhost:15672.
+
+### Configure Nimbus for LavinMQ
+
+LavinMQ uses the same `RabbitMqTransportConfiguration` as RabbitMQ — just point at your LavinMQ host:
+
+```csharp
+var bus = new BusBuilder()
+    .Configure()
+    .WithNames("OrderService", Environment.MachineName)
+    .WithTransport(new RabbitMqTransportConfiguration()
+        .WithHost("localhost")
+        .WithCredentials("guest", "guest"))
+    .WithTypesFrom(typeProvider)
+    .WithAutofacDefaults(container)
+    .Build();
+
+await bus.Start();
+```
+
+<Callout type="tip">
+Nimbus is tested against both RabbitMQ and LavinMQ on every build, so you can be confident both brokers work correctly.
+</Callout>
+
+## Configuration Reference
+
+```csharp
+new RabbitMqTransportConfiguration()
+    .WithHost("rabbitmq.internal")       // default: "localhost"
+    .WithPort(5672)                      // default: 5672
+    .WithCredentials("user", "secret")  // default: "guest"/"guest"
+    .WithVirtualHost("/my-vhost")        // default: "/"
+    .WithManagementPort(15672)           // optional, for management API access
+```
+
+## Scheduled Delivery
+
+Both RabbitMQ and LavinMQ support scheduled message delivery via Nimbus:
+
+```csharp
+// Deliver after a delay
+await bus.SendAfter(new MyCommand(), TimeSpan.FromMinutes(5));
+
+// Deliver at a specific time
+await bus.SendAt(new MyCommand(), DateTimeOffset.UtcNow.AddHours(1));
+```
+
+**RabbitMQ** uses the `rabbitmq_delayed_message_exchange` plugin. A single `nimbus.delayed` exchange is declared at startup; Nimbus routes deferred messages through it automatically using the `x-delay` header.
+
+**LavinMQ** supports delayed messages natively using the same `x-delay` header — no plugin or extra configuration needed.
+
+<Callout type="warning">
+RabbitMQ **requires** the `rabbitmq_delayed_message_exchange` plugin for scheduled delivery. Without it, calls to `SendAfter` or `SendAt` will fail. LavinMQ has no such requirement.
+</Callout>
+
+## Topology
+
+Nimbus maps its messaging patterns to RabbitMQ concepts as follows:
+
+| Nimbus concept | RabbitMQ topology |
+|---|---|
+| **Command queue** | Durable queue on the default exchange |
+| **Competing event** | Fanout exchange per topic; consumers share one durable queue |
+| **Multicast event** | Fanout exchange per topic; each subscriber gets its own durable queue |
+| **Scheduled delivery** | `nimbus.delayed` exchange (`x-delayed-message` type, durable) |
+
+## Limitations
+
+- Large message support is not available.
+
+## Compatibility
+
+- ✅ **RabbitMQ 3.x / 4.x** (requires `rabbitmq_delayed_message_exchange` plugin for scheduled delivery)
+- ✅ **LavinMQ 1.x+** (native delayed delivery, no plugin required)
+- ✅ **.NET 9.0+**

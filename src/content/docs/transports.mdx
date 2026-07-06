@@ -48,6 +48,17 @@ Nimbus supports multiple messaging transports, each with different characteristi
     [Learn more →](/docs/transports/amqp)
   </Card>
 
+  <Card title="RabbitMQ / LavinMQ" icon="🐇">
+    **AMQP 0.9.1 transport** for RabbitMQ and LavinMQ.
+
+    - Widely adopted, rich ecosystem
+    - Competing and multicast consumers
+    - Native delayed delivery (LavinMQ) or via plugin (RabbitMQ)
+    - [LavinMQ](https://lavinmq.com): lightweight, low-latency drop-in alternative
+
+    [Learn more →](/docs/transports/rabbitmq)
+  </Card>
+
   <Card title="NATS" icon="🚀">
     **Ultra-fast** cloud-native messaging with optional JetStream persistence.
 
@@ -96,16 +107,16 @@ Nimbus supports multiple messaging transports, each with different characteristi
 
 ## Transport Comparison
 
-| Feature | Azure Service Bus | Redis | AMQP | NATS | SQL Server | PostgreSQL | In-Process |
-|---------|------------------|-------|------|------|------------|------------|------------|
-| **Deployment** | Cloud (Azure) | Self-hosted or Cloud | Self-hosted | Self-hosted or Cloud | Existing DB | Existing DB | N/A |
-| **Extra infra required** | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
-| **Durability** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐ / ⭐⭐⭐⭐ (JetStream) | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐ |
-| **Performance** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐⭐⭐ |
-| **Setup Complexity** | ⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ |
-| **Cost** | Pay per use | Free (self-host) | Free (self-host) | Free (self-host) | Existing DB cost | Existing DB cost | Free |
-| **Message delivery** | Push | Push | Push | Push | Polling | Polling | In-memory |
-| **Message Size** | 256KB / 1MB | 512MB | 100MB+ | 1MB (default) | VARBINARY(MAX) | BYTEA | Unlimited |
+| Feature | Azure Service Bus | Redis | AMQP | RabbitMQ / LavinMQ | NATS | SQL Server | PostgreSQL | In-Process |
+|---------|------------------|-------|------|---------------------|------|------------|------------|------------|
+| **Deployment** | Cloud (Azure) | Self-hosted or Cloud | Self-hosted | Self-hosted | Self-hosted or Cloud | Existing DB | Existing DB | N/A |
+| **Extra infra required** | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **Durability** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐ / ⭐⭐⭐⭐ (JetStream) | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐ |
+| **Performance** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐⭐⭐ |
+| **Setup Complexity** | ⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ |
+| **Cost** | Pay per use | Free (self-host) | Free (self-host) | Free (self-host) | Free (self-host) | Existing DB cost | Existing DB cost | Free |
+| **Message delivery** | Push | Push | Push | Push | Push | Polling | Polling | In-memory |
+| **Message Size** | 256KB / 1MB | 512MB | 100MB+ | 128MB (default) | 1MB (default) | VARBINARY(MAX) | BYTEA | Unlimited |
 
 ## Choosing a Transport
 
@@ -155,6 +166,20 @@ var transport = new AMQPTransportConfiguration()
     .WithBrokerUri("amqp://localhost:5672")
     .WithCredentials("admin", "admin")
     .WithConnectionPoolSize(10);
+```
+</CodeBlock>
+
+**RabbitMQ / LavinMQ** if you:
+- Want a well-established broker with a rich management UI and ecosystem
+- Run on-premises or in a private cloud
+- Need AMQP 0.9.1 compatibility
+- Want **LavinMQ** as a lightweight, low-latency alternative with no plugin dependencies
+
+<CodeBlock title="Configure RabbitMQ Transport">
+```csharp
+var transport = new RabbitMqTransportConfiguration()
+    .WithHost("localhost")
+    .WithCredentials("admin", "admin");
 ```
 </CodeBlock>
 
@@ -223,26 +248,28 @@ var transport = new InProcessTransportConfiguration();
 
 ### Core Features
 
-| Feature | Azure Service Bus | Redis | AMQP | NATS | SQL Server | PostgreSQL | In-Process |
-|---------|------------------|-------|------|------|------------|------------|------------|
-| Commands | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Events (Competing) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Events (Multicast) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Requests | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Multicast Requests | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Feature | Azure Service Bus | Redis | AMQP | RabbitMQ / LavinMQ | NATS | SQL Server | PostgreSQL | In-Process |
+|---------|------------------|-------|------|---------------------|------|------------|------------|------------|
+| Commands | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Events (Competing) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Events (Multicast) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Requests | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Multicast Requests | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ### Advanced Features
 
-| Feature | Azure Service Bus | Redis | AMQP | NATS | SQL Server | PostgreSQL | In-Process |
-|---------|------------------|-------|------|------|------------|------------|------------|
-| **Scheduled Delivery** | ✅ Native | ⚠️ Polling | ✅ Native | ✅ Simulated | ✅ `visible_after` | ✅ `visible_after` | ✅ Full support |
-| **Message TTL** | ✅ Native | ✅ Native | ✅ Native | ✅ JetStream | ✅ `expires_at` | ✅ `expires_at` | ✅ Simulated |
-| **Dead Letter Queue** | ✅ Native | ⚠️ Manual | ✅ Native | ✅ | ✅ DB table | ✅ DB table | ⚠️ Manual |
-| **Large Messages** | ✅ Blob store | ❌ | ✅ Blob store | ❌ | ❌ | ❌ | ✅ |
-| **Transactions** | ✅ Full support | ⚠️ Limited | ✅ Full support | ❌ | ❌ | ❌ | ✅ |
-| **Sessions** | ✅ Full support | ❌ | ✅ Full support | ❌ | ❌ | ❌ | ❌ |
-| **Duplicate Detection** | ✅ Native | ⚠️ Manual | ⚠️ Manual | ⚠️ Manual | ⚠️ Manual | ⚠️ Manual | ⚠️ Manual |
-| **Encryption at rest** | ✅ Native | ⚠️ Manual | ⚠️ Manual | ⚠️ Manual | ✅ TDE | ✅ Native | ❌ |
+| Feature | Azure Service Bus | Redis | AMQP | RabbitMQ / LavinMQ | NATS | SQL Server | PostgreSQL | In-Process |
+|---------|------------------|-------|------|---------------------|------|------------|------------|------------|
+| **Scheduled Delivery** | ✅ Native | ⚠️ Polling | ✅ Native | ✅ Plugin / Native† | ✅ Simulated | ✅ `visible_after` | ✅ `visible_after` | ✅ Full support |
+| **Message TTL** | ✅ Native | ✅ Native | ✅ Native | ✅ Native | ✅ JetStream | ✅ `expires_at` | ✅ `expires_at` | ✅ Simulated |
+| **Dead Letter Queue** | ✅ Native | ⚠️ Manual | ✅ Native | ✅ Native | ✅ | ✅ DB table | ✅ DB table | ⚠️ Manual |
+| **Large Messages** | ✅ Blob store | ❌ | ✅ Blob store | ❌ | ❌ | ❌ | ❌ | ✅ |
+| **Transactions** | ✅ Full support | ⚠️ Limited | ✅ Full support | ⚠️ Limited | ❌ | ❌ | ❌ | ✅ |
+| **Sessions** | ✅ Full support | ❌ | ✅ Full support | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Duplicate Detection** | ✅ Native | ⚠️ Manual | ⚠️ Manual | ⚠️ Manual | ⚠️ Manual | ⚠️ Manual | ⚠️ Manual | ⚠️ Manual |
+| **Encryption at rest** | ✅ Native | ⚠️ Manual | ⚠️ Manual | ⚠️ Manual | ⚠️ Manual | ✅ TDE | ✅ Native | ❌ |
+
+† RabbitMQ requires the `rabbitmq_delayed_message_exchange` plugin; LavinMQ supports delayed delivery natively.
 
 ## Performance Characteristics
 
@@ -256,6 +283,7 @@ var transport = new InProcessTransportConfiguration();
 **Medium-High Throughput** (1,000-10,000 msgs/sec):
 - Azure Service Bus (premium tier)
 - AMQP brokers (with tuning)
+- RabbitMQ / LavinMQ (LavinMQ is notably faster due to lower overhead)
 
 **Medium Throughput** (100-1,000 msgs/sec):
 - Azure Service Bus (standard tier)
@@ -274,6 +302,10 @@ var transport = new InProcessTransportConfiguration();
 **Medium** (10-50ms):
 - Azure Service Bus
 - AMQP brokers (Artemis, etc.)
+- RabbitMQ (10-30ms typical)
+
+**Low-Medium** (1-20ms):
+- LavinMQ (lower overhead than RabbitMQ)
 
 **Poll-interval-dependent** (configurable, default ~1s):
 - SQL Server
@@ -299,6 +331,11 @@ var transport = new InProcessTransportConfiguration();
 - Default: 100 MB (configurable)
 - Broker-dependent limits
 - Large message support available
+
+### RabbitMQ / LavinMQ
+- Default max frame size: 128 MB (configurable)
+- Broker-dependent limits
+- No external large message store support
 
 ### NATS
 - Default max payload: 1 MB (configurable on the server)
@@ -372,6 +409,11 @@ public class IdempotentPlaceOrderHandler : IHandleCommand<PlaceOrderCommand>
 - Durable subscriptions available
 - Survives broker restarts with proper configuration
 
+**RabbitMQ / LavinMQ**:
+- Durable queues and persistent messages survive broker restarts
+- Messages written to disk when marked persistent (default in Nimbus)
+- LavinMQ: same durability guarantees, lower resource overhead
+
 **NATS**:
 - Standard mode: messages held in memory, not persisted across restarts
 - JetStream mode: persistent streams stored on disk, survives broker restarts
@@ -411,6 +453,12 @@ public class IdempotentPlaceOrderHandler : IHandleCommand<PlaceOrderCommand>
 - Web console included
 - Management API available
 
+**RabbitMQ / LavinMQ**:
+- Management UI at port 15672 (both brokers)
+- HTTP API for programmatic monitoring
+- Prometheus exporter available for RabbitMQ
+- NATS-style HTTP monitoring endpoint for LavinMQ
+
 **NATS**:
 - HTTP monitoring endpoint at port 8222
 - NATS CLI (`nats`) for real-time stats and stream inspection
@@ -436,6 +484,8 @@ public class IdempotentPlaceOrderHandler : IHandleCommand<PlaceOrderCommand>
 - **Azure Service Bus**: Upgrade to premium tier
 - **Redis**: Use Redis Cluster
 - **AMQP**: Clustering and failover
+- **RabbitMQ**: Classic or quorum queues; cluster for HA
+- **LavinMQ**: Lightweight single-node; scale-out via multiple instances
 - **NATS**: Use NATS Cluster or JetStream clustering
 - **SQL Server / PostgreSQL**: Scale up the database; reduce poll interval for lower latency
 - **In-Process**: Add more threads (limited)
@@ -456,6 +506,14 @@ public class IdempotentPlaceOrderHandler : IHandleCommand<PlaceOrderCommand>
 - Master-slave configuration
 - Clustering support
 - Manual setup and maintenance
+
+**RabbitMQ**:
+- Classic mirrored queues or quorum queues for replication
+- RabbitMQ Cluster for HA with automatic failover
+
+**LavinMQ**:
+- Designed for single-node; run multiple isolated instances if needed
+- Simpler operational model compared to RabbitMQ clustering
 
 **NATS**:
 - NATS Cluster for HA (3+ nodes recommended)
@@ -490,6 +548,16 @@ public class IdempotentPlaceOrderHandler : IHandleCommand<PlaceOrderCommand>
 ### AMQP (ActiveMQ Artemis)
 - **Self-hosted**: Server and maintenance costs
 - **Best for**: On-premises deployments, full control requirements, open standards
+
+### RabbitMQ
+- **Self-hosted**: Server costs only
+- **Managed (CloudAMQP, AWS MQ)**: ~$20-200/month depending on tier
+- **Best for**: Teams that want a widely-supported AMQP 0.9.1 broker with rich tooling
+
+### LavinMQ
+- **Self-hosted**: Server costs only — minimal resource footprint (~20 MB RAM idle)
+- **Managed (CloudAMQP LavinMQ)**: Available on CloudAMQP platform
+- **Best for**: Low-overhead deployments where RabbitMQ compatibility is needed but resource usage matters
 
 ### NATS
 - **Self-hosted**: Server costs only (single binary, very lightweight)
@@ -587,6 +655,20 @@ var transport = new AMQPTransportConfiguration()
 ```
 
 [Full guide →](/docs/transports/amqp)
+
+### RabbitMQ / LavinMQ
+
+```bash
+dotnet add package Nimbus.Transports.RabbitMQ
+```
+
+```csharp
+var transport = new RabbitMqTransportConfiguration()
+    .WithHost("localhost")
+    .WithCredentials("admin", "admin");
+```
+
+[Full guide →](/docs/transports/rabbitmq)
 
 ### NATS
 

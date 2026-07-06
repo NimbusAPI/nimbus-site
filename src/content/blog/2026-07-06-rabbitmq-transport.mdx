@@ -1,0 +1,41 @@
+---
+title: New Transport! RabbitMQ and LavinMQ
+publishDate: 2026-07-06
+description: Nimbus now supports RabbitMQ and LavinMQ as messaging transports via a single AMQP 0.9.1 transport package.
+author: "Damian Maclennan"
+tags: ["announcement", "transports", "rabbitmq"]
+---
+
+Nimbus has a new transport: RabbitMQ (and LavinMQ).
+
+[RabbitMQ](https://www.rabbitmq.com) is one of the most widely deployed message brokers around. If your team already runs it, you can plug Nimbus straight in.
+
+## LavinMQ: worth knowing about
+
+The transport also works with [LavinMQ](https://lavinmq.com), a lightweight broker from the [CloudAMQP](https://www.cloudamqp.com) team. It uses AMQP 0.9.1, so it works with the same RabbitMQ client. Switching between them is a config change, nothing else. LavinMQ is a great, low latency option, and it handles delayed messages natively without any plugins.
+
+If you're self-hosting and don't need the full RabbitMQ feature set, it's worth a look. CloudAMQP also offers [managed LavinMQ hosting](https://www.cloudamqp.com) if you'd rather not run it yourself.
+
+## Getting started
+
+```bash
+dotnet add package Nimbus.Transports.RabbitMQ
+```
+
+```csharp
+// RabbitMQ
+var transport = new RabbitMqTransportConfiguration()
+    .WithHost("localhost")
+    .WithCredentials("admin", "admin");
+
+// LavinMQ: same config, different host/port
+var transport = new RabbitMqTransportConfiguration()
+    .WithHost("localhost")
+    .WithPort(5673);
+```
+
+## Scheduled delivery
+
+Both brokers support `SendAfter` and `SendAt`. RabbitMQ requires the `rabbitmq_delayed_message_exchange` community plugin. LavinMQ handles it natively, no plugin needed.
+
+See the [RabbitMQ transport docs](/docs/transports/rabbitmq) for the full configuration reference.
